@@ -32,14 +32,14 @@ add_belt <- function(grid, belt, edge_val) {
 # ══════════════════════════════════════════════════════════
 #  HELPER: matrix → terra raster
 # ══════════════════════════════════════════════════════════
-to_raster <- function(mat #, crs_str = "EPSG:5514"
+to_raster <- function(mat , crs_str = "EPSG:25833" # crs(r) <- "EPSG:25833"  # ETRS89 / UTM zone 33N — Central Europe standard
                       ) {
   new_n <- nrow(mat)
   r <- rast(nrows = new_n, ncols = new_n,
             xmin = 0, xmax = new_n * res_m,
             ymin = 0, ymax = new_n * res_m)
   values(r) <- as.vector(t(mat))
-  #crs(r)    <- crs_str
+  crs(r)    <- crs_str
   r
 }
 
@@ -163,6 +163,7 @@ make_ru_grid <- function() {
             xmin = 0, xmax = extent_m,
             ymin = 0, ymax = extent_m)
   values(r) <- as.vector(t(g))
+  crs(r) <- "EPSG:25833"
   #crs(r)    <- "EPSG:5514"
   r
 }
@@ -196,7 +197,6 @@ writeRaster(r8,   "outData/stand_C4_2022_8blobs.asc",
 writeRaster(r_ru, "outData/climate_ru.asc",
             filetype = "AAIGrid", overwrite = TRUE)
 
-cat("\n=== Files written ===\n")
 
 # ══════════════════════════════════════════════════════════
 #  VISUAL CHECK
