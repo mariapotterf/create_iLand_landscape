@@ -17,8 +17,8 @@ target_size <- round(target_frac * n * n)  # 3860 cells = 3.86 ha
 # Coordinates — from real Kostelec landscape files
 # (standgrid_20260330.asc and ru_ids_20260330.asc)
 # CRS: Křovák EPSG:5514
-XLL <- -823100
-YLL <- -1178600
+XLL <- -809850 - 700   # = -810550
+YLL <- -1161450 - 700  # = -1162150
 
 # iLand stand grid values — confirmed from standgrid_20260330.asc:
 #   0   = NODATA (truly outside, non-forested) — written as NODATA_value
