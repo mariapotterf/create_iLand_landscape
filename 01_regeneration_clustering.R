@@ -559,9 +559,9 @@ cat("\nT0_bare -> initialize as bare soil (no init file).\n")
 # ---------------------------------------------------------------------
 # 8. Export
 # ---------------------------------------------------------------------
-write.csv(plots,              "CZ_plots_archetypes.csv",   row.names = FALSE)
-write.csv(archetype_profiles, "CZ_archetype_profiles.csv", row.names = FALSE)
-write.csv(medoids,            "CZ_archetype_medoids.csv",  row.names = FALSE)
+write.csv(merged_df_cluster,  "outData/CZ_plots_archetypes.csv",   row.names = FALSE)
+write.csv(archetype_profiles, "outData/CZ_archetype_profiles.csv", row.names = FALSE)
+write.csv(medoids,            "outData/CZ_archetype_medoids.csv",  row.names = FALSE)
 
 cat("\nDone. iLand init files in ./iland_init/ ; one sapling (+ optional tree)\n",
     "file per archetype, each drawn from its medoid's real stems.\n")
