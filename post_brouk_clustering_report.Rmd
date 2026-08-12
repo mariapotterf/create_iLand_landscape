@@ -49,7 +49,7 @@ library(tibble)
 
 # Data loading & merging
 
-```{r load-data}
+```{r load-data, warning=FALSE}
 
 raw_dir <- "C:/Users/potterf/OneDrive - CZU v Praze/Dokumenty/2025_CZU_postbrouk/r_iLand_landscape/create_iLand_landscape/rawData"
 
@@ -91,14 +91,14 @@ spruce_counts <- sub_veg %>%
  # mutate(plot = as.character(plot))
 ```
 
-# Elevation sanity check (exploratory)
+# Elevation sanity check  
 
 Elevation is *not* used as a clustering input (iLand handles climate/
 elevation internally) — this is a data sanity check only. Does elevation has any effect on species richness, on share of spruce in regeneration?
 
 - there is some visual trend, but overall, elevation explains very little in species diversity and in spruce abundance - remove elevation from 
 
-```{r elevation-trends}
+```{r elevation-trends, warning=FALSE}
 g_eff <- gam(effective_numbers ~ s(elevation, k = 4), data = plot_df, method = "REML")
 g_spr <- gam(spruce_share ~ s(elevation, k = 4), data = plot_df,
              family = quasibinomial, method = "REML")
@@ -126,6 +126,16 @@ p2 <- ggplot(plot_df, aes(elevation, spruce_share)) +
 
 ggarrange(p1, p2)
 ```
+# Clustering variables & pairwise inspection
+
+## Is there any clustering visible in raw data?
+
+use main variable characetristics for cluster analysis -> to understand, which of those variables are most importnat.  Do i actually have any visible clusters already present? see on scatter plot. in plot has mature trees present, it is shown by green.
+
+
+
+
+
 
 # Deriving regeneration flags
 
@@ -198,15 +208,42 @@ cat("Pre-classified as T_mature: ", sum(merged_df$regen_type == "T_mature"), "\n
 cat("Remaining for clustering:  ", sum(merged_df$regen_type == "to_cluster"), "\n")
 ```
 
+## Any visible clusters present?
+
+```{r pairs-plot, warning=FALSE}
+
+resp_vars <- c("dens_ha", "mean_hgt", "cv_hgt", "frac_empty_sub",
+               "sp_richness", "CWM_shade", "CWM_drought", "spruce_share", "IV_coniferous")
+
+pair_df <- merged_df %>%
+  #filter(plot %in% clust_data$plot) %>%
+  select(plot, all_of(resp_vars), has_mature) %>%
+  mutate(mature = ifelse(has_mature, "mat_present", "mat_abs"))
+
+ggpairs(
+  pair_df, columns = resp_vars,
+  mapping = aes(colour = mature),
+  lower = list(continuous = wrap("points", alpha = 0.6, size = 1.3)),
+  upper = list(continuous = wrap("cor", size = 3)),
+  diag  = list(continuous = wrap("densityDiag", alpha = 0.4))
+) +
+  #scale_colour_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
+  #scale_fill_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
+  theme_bw()
+```
+
+
+
+
 # PCA screening
 
 Used to *screen/inspect* candidate variables, not to relate predictors to a
 response — the actual clustering below runs on raw scaled variables, not
 PC scores, so this step is descriptive/QA only.
 
-```{r pca}
-resp_vars <- c("dens_ha", "mean_hgt", "cv_hgt", "frac_empty_sub",
-               "sp_richness", "CWM_shade", "CWM_drought", "spruce_share", "IV_coniferous")
+```{r pca, warning=FALSE}
+# resp_vars <- c("dens_ha", "mean_hgt", "cv_hgt", "frac_empty_sub",
+#                "sp_richness", "CWM_shade", "CWM_drought", "spruce_share", "IV_coniferous")
 
 pca_input <- merged_df %>%
   #filter(!regen_type %in% c("T0_bare", "T_mature")) %>%
@@ -235,30 +272,7 @@ p_pca2 <- autoplot(pca_fit, x = 2, y = 3, data = pca_input, #colour = "has_matur
 ggarrange(p_pca1, p_pca2)
 ```
 
-# Clustering variables & pairwise inspection
 
-## Is there any clustering visible in raw data?
-
-use main variable characetristics for cluster analysis -> to understand, which of those variables are most importnat.  Do i actually have any visible clusters already present? see on scatter plot. in plot has mature trees present, it is shown by green.
-
-
-```{r pairs-plot}
-pair_df <- merged_df %>%
-  #filter(plot %in% clust_data$plot) %>%
-  select(plot, all_of(resp_vars), has_mature) %>%
-  mutate(mature = ifelse(has_mature, "mat_present", "mat_abs"))
-
-ggpairs(
-  pair_df, columns = resp_vars,
-  mapping = aes(colour = mature),
-  lower = list(continuous = wrap("points", alpha = 0.6, size = 1.3)),
-  upper = list(continuous = wrap("cor", size = 3)),
-  diag  = list(continuous = wrap("densityDiag", alpha = 0.4))
-) +
-  #scale_colour_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
-  #scale_fill_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
-  theme_bw()
-```
 
 
 Overall, it seems there are not very distinct clusters - instead, teh data represent more a continuous type of recpovery. As I think it is impirtant to represent no regeneration option (1 plot), and if mature trees are present ( 10 plots), I will keep them separate. I will run cluster analyses on remaining plots (188 plots).
@@ -315,7 +329,7 @@ Silhouette widths interpreations:
 
 Both k=2 or k=3 can terefore work here. I am analysis how individual clusters looks like if k = 2 vs k = 3. 
 
-## Archetype differentiation: k = 2 vs k = 3
+## How many clusters? 
 
 Run PAM on k = 2 and k = 3 to compare how number of plots and their charactersitics change.
 
@@ -361,7 +375,7 @@ plot_archetype_boxplots <- function(merged_k, vars_to_plot, k) {
 }
 ```
 
-### k = 2
+### Compare k = 2 vs k = 3
 
 ```{r k2-run}
 res_k2 <- run_pam_k(2, X_sc, clust_data, merged_df)
@@ -374,7 +388,6 @@ print(as.data.frame(res_k2$medoids))
 p_box_k2 <- plot_archetype_boxplots(res_k2$merged, vars, 2)
 ```
 
-### k = 3
 
 ```{r k3-run}
 res_k3 <- run_pam_k(3, X_sc, clust_data, merged_df)
@@ -423,7 +436,7 @@ ggarrange(p_env_k2, p_env_k3, nrow = 2, ncol = 1)
 
 ## Final archetype profiles
 
-```{r archetype-profiles}
+```{r archetype-profiles, warning=FALSE}
 summary_vars <- c("dens_ha", "mean_hgt", "spruce_share", "sp_richness",
                    "CWM_drought", "frac_empty_sub",
                    "clear_intensity", "grndwrk_intensity", "logging_trail_intensity",
@@ -450,12 +463,12 @@ print(as.data.frame(
 Elevation was not a clustering input; this checks whether it structures
 the response across the final archetypes.
 
-```{r elevation-posthoc}
+```{r elevation-posthoc, warning=FALSE}
 regen_labels_final <- paste0("T", seq_len(FINAL_K))
 
 driver_long <- merged_df_cluster %>%
-  select(regen_type, elevation, effective_numbers, sp_richness, spruce_share) %>%
-  pivot_longer(c(effective_numbers, sp_richness, spruce_share),
+  select(regen_type, elevation, dens_ha, sp_richness, spruce_share) %>%
+  pivot_longer(c(dens_ha, sp_richness, spruce_share),
                names_to = "response", values_to = "value")
 
 ggplot(driver_long, aes(elevation, value)) +
@@ -489,7 +502,7 @@ merged_df_cluster %>%
   theme_bw()
 ```
 
-```{r elevation-posthoc-gam}
+```{r elevation-posthoc-gam, warning=FALSE}
 
 # Restrict to the archetypes that have an elevation gradient worth testing
 # (bare/mature groups aren't relevant to this question)
@@ -638,41 +651,41 @@ medoids_all
 
 ### Print out the archetypes
 
-# ```{r print_medoids}
-# medoid_plots_names <- medoids_all$medoid_plot
-# 
-# # raw stem-level records (species x subplot x height/dbh class) for each medoid plot
-# medoid_raw_sub <-
-#   sub_veg %>%
-#   filter(plot %in% medoid_plots_names, !is.na(n), n > 0) %>%
-#   select(plot, subplot, species, vegtype, hgt, dbh, n, #hgt_est, dbh_est
-#          ) %>%
-#   left_join(medoids_all %>% select(plot, regen_type), by = "plot") %>%
-#   arrange(regen_type, plot, vegtype, species)
-# 
+```{r print_medoids}
+ medoid_plots_names <- medoids_all$mplot
+
+ # raw stem-level records (species x subplot x height/dbh class) for each medoid plot
+ medoid_raw_sub <-
+   sub_veg %>%
+   filter(plot %in% medoid_plots_names, !is.na(n), n > 0) %>%
+   select(plot, subplot, species, vegtype, hgt, dbh, n, #hgt_est, dbh_est
+          ) %>%
+   left_join(medoids_all %>% select(plot, regen_type), by = "plot") %>%
+  arrange(regen_type, plot, vegtype, species)
+#
 # cat("=== Raw stem records for medoid plots ===\n")
 # print(as.data.frame(medoid_raw), row.names = FALSE)
-# 
+#
 # # structural / environmental profile of the same medoid plots, for context
 # medoid_summary <- merged_df_cluster %>%
 #   filter(plot %in% medoid_plots) %>%
 #   select(plot, regen_type, dens_ha, mean_hgt, spruce_share, sp_richness,
 #          frac_empty_sub, n_mature, elevation, disturbance_severity) %>%
 #   arrange(regen_type)
-# 
+#
 # cat("\n=== Structural/environmental profile of medoid plots ===\n")
 # print(as.data.frame(medoid_summary), row.names = FALSE)
-# 
-# 
-# # get sum up info on plot level
-# medoid_raw_plot <- medoid_raw_sub %>%
-#   group_by(regen_type, plot, species, vegtype, hgt, dbh) %>%
-#   summarise(n = sum(n), .groups = "drop") %>%
-#   arrange(regen_type, plot, vegtype, species)
-# 
-# print(medoid_raw_plot)
-# 
-# ```
+#
+#
+# get sum up info on plot level
+medoid_raw_plot <- medoid_raw_sub %>%
+  group_by(regen_type, plot, species, vegtype, hgt, dbh) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  arrange(regen_type, plot, vegtype, species)
+
+print(medoid_raw_plot)
+#
+```
 
 # What is my species composition and characteristics based on frequency of archetypes?
 ```{r sanity-check}
