@@ -254,7 +254,7 @@ sil_scores <- sapply(2:8, function(k) {
 cat("Silhouette (avg width) by k:\n")
 for (i in seq_along(sil_scores)) cat(sprintf("  k=%d: %.3f\n", i + 1, sil_scores[i]))
 #k_opt <- which.max(sil_scores) + 1
-k_opt <- 3 # set manually to two
+k_opt <- 3 # very low difference between k = 2 and k = 3;
 cat(sprintf("\nOptimal k = %d\n\n", k_opt))
 
 sil_df <- data.frame(k = 2:8, silhouette = sil_scores)
