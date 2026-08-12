@@ -1,0 +1,780 @@
+---
+title: "Post-Disturbnace Regeneration Archetypes"
+subtitle: "Clustering Czech field plots (2025) for iLand initialization"
+author: "Maria potterf"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: show
+    number_sections: true
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message = FALSE,
+                       fig.width = 8, fig.height = 5)
+
+```
+
+# Introduction
+
+We reduce Czech Republic post-disturbance field plots (2025 survey) to a
+small number of ecologically meaningful **regeneration archetypes**, each
+anchored to one real, representative plot (its *medoid*). Those medoids
+supply the actual observed species/stem data used to initialize synthetic
+iLand landscapes.
+
+
+```{r libraries}
+library(sf)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(cluster)      # PAM, silhouette
+library(factoextra)
+library(RColorBrewer)
+library(data.table)
+library(terra)
+library(ggpubr)
+library(ggpmisc)
+library(mgcv)
+library(gratia)
+library(GGally)
+library(ggfortify)
+library(tibble)
+```
+
+# Data loading & merging
+
+```{r load-data}
+
+raw_dir <- "C:/Users/potterf/OneDrive - CZU v Praze/Dokumenty/2025_CZU_postbrouk/r_iLand_landscape/create_iLand_landscape/rawData"
+
+# read evn variables on plot level
+plot_df <- fread(file.path(raw_dir, "env_chars_Czechia_2025.csv")) %>%
+   filter(year == 2025) %>% 
+  as_tibble() %>%
+  mutate(plot = as.character(plot))   # join key must be character (compound IDs exist, e.g. "15_101")
+
+# read raw data - contains species and stem counst and heights on sbplot level
+sub_veg <- fread(file.path(raw_dir, "dat_full_species_Czechia_2025.csv")) %>%
+  as_tibble() %>%
+  mutate(plot = as.character(plot)) %>% 
+  filter(year == 2025) %>% 
+  filter(!species %in% c("ots1", ""))
+
+
+# get spruce counts (instead of shares) to handle zero inflation
+spruce_counts <- sub_veg %>%
+  filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced")) %>%
+  group_by(plot) %>%
+  summarise(
+    n_spruce    = sum(n[species == "piab"], na.rm = TRUE),
+    n_nonspruce = sum(n[species != "piab"], na.rm = TRUE),
+    .groups = "drop"
+  )
+#plot_v_all_countries <- terra::vect("../../r_post_brouk/outDataShare/Karim_AEF/cleaned/env_chars_plots.gpkg")
+#plot_v_cz <- plot_v_all_countries[plot_v_all_countries$country_name == "Czech Republic" &
+ #                                    plot_v_all_countries$year == 2025, ]
+
+#plot_df <- as.data.frame(plot_v_cz) %>%
+#  select(-subplot, -plot_id, -country, -region) %>%
+#  mutate(plot = as.character(plot))   # join key must be character (compound IDs exist, e.g. "15_101")
+
+#stopifnot("plot" %in% names(plot_df))
+
+#sub_veg <- fread("../../r_post_brouk/outData/dat_full_species_all_countries.csv") %>%
+ # filter(country_name == "Czechia" & year == 2025) %>%
+ # mutate(plot = as.character(plot))
+```
+
+# Elevation sanity check (exploratory)
+
+Elevation is *not* used as a clustering input (iLand handles climate/
+elevation internally) — this is a data sanity check only. Does elevation has any effect on species richness, on share of spruce in regeneration?
+
+- there is some visual trend, but overall, elevation explains very little in species diversity and in spruce abundance - remove elevation from 
+
+```{r elevation-trends}
+g_eff <- gam(effective_numbers ~ s(elevation, k = 4), data = plot_df, method = "REML")
+g_spr <- gam(spruce_share ~ s(elevation, k = 4), data = plot_df,
+             family = quasibinomial, method = "REML")
+summary(g_eff); summary(g_spr)
+appraise(g_spr)
+
+gam_lab <- function(m) {
+  s <- summary(m)
+  sprintf("dev.expl = %.1f%%,  edf = %.2f,  p = %.3f",
+          100 * s$dev.expl, s$s.table[1, "edf"], s$s.table[1, "p-value"])
+}
+
+p1 <- ggplot(plot_df, aes(elevation, effective_numbers)) +
+  geom_point(alpha = .5) +
+  geom_smooth(method = "gam", formula = y ~ s(x, k = 4)) +
+  annotate("text", -Inf, Inf, hjust = -0.05, vjust = 1.4, label = gam_lab(g_eff)) +
+  theme_bw()
+
+p2 <- ggplot(plot_df, aes(elevation, spruce_share)) +
+  geom_point(alpha = .5) +
+  geom_smooth(method = "gam", formula = y ~ s(x, k = 4),
+              method.args = list(family = quasibinomial)) +
+  annotate("text", -Inf, Inf, hjust = -0.05, vjust = 1.4, label = gam_lab(g_spr)) +
+  theme_bw()
+
+ggarrange(p1, p2)
+```
+
+# Deriving regeneration flags
+
+```{r emptiness}
+empty_by_plot <- sub_veg %>%
+  group_by(plot, subplot) %>%
+  summarise(sub_stems = sum(n, na.rm = TRUE), .groups = "drop") %>%
+  group_by(plot) %>%
+  summarise(
+    n_subplots     = n_distinct(subplot),
+    n_empty_sub    = sum(sub_stems == 0),
+    frac_empty_sub = mean(sub_stems == 0),
+    all_empty      = all(sub_stems == 0),
+    any_empty      = any(sub_stems == 0),
+    .groups = "drop"
+  ) %>%
+  mutate(plot = as.character(plot))
+
+cat("=== Regeneration status ===\n")
+cat("ALL subplots empty (truly bare):", sum(empty_by_plot$all_empty),
+    sprintf("(%.1f%%)\n", 100 * mean(empty_by_plot$all_empty)))
+cat("ANY subplot empty:              ", sum(empty_by_plot$any_empty),
+    sprintf("(%.1f%%)\n", 100 * mean(empty_by_plot$any_empty)))
+cat("NO empty subplots:              ", sum(!empty_by_plot$any_empty),
+    sprintf("(%.1f%%)\n\n", 100 * mean(!empty_by_plot$any_empty)))
+cat("Empty-subplot distribution:\n"); print(table(empty_by_plot$n_empty_sub))
+```
+
+Mature-tree presence (dbh >= 10 cm, `vegtype == "mature"`) is flagged at
+plot level so we can *test* whether a residual-overstory archetype emerges,
+rather than assume it:
+
+```{r mature-flag}
+mature_by_plot <- sub_veg %>%
+  filter(!is.na(n), n > 0, vegtype == "mature") %>%
+  group_by(plot) %>%
+  summarise(n_mature = sum(n), .groups = "drop")
+
+merged_df <- plot_df %>%
+  left_join(mature_by_plot, by = join_by(plot)) %>%
+  left_join(empty_by_plot, by = join_by(plot)) %>%
+  mutate(
+    n_mature   = tidyr::replace_na(n_mature, 0),
+    has_mature = n_mature > 0
+  )
+
+cat("Plots with >=1 residual mature tree:", sum(merged_df$has_mature), "\n")
+```
+
+# Rule-based pre-classification
+
+Regeneration status is more a gradient than discrete groups, but two edge
+cases are structurally distinct enough to pull out *before* clustering:
+totally bare plots (no regeneration signal to cluster on), and plots with
+residual overstory (driven by legacy trees, not the regeneration process
+itself).
+
+```{r pre-classify}
+merged_df <- merged_df %>%
+  mutate(
+    regen_type = case_when(
+      all_empty  ~ "T0_bare",
+      has_mature ~ "T_mature",
+      TRUE       ~ "to_cluster"
+    )
+  )
+
+cat("Pre-classified as T0_bare:  ", sum(merged_df$regen_type == "T0_bare"), "\n")
+cat("Pre-classified as T_mature: ", sum(merged_df$regen_type == "T_mature"), "\n")
+cat("Remaining for clustering:  ", sum(merged_df$regen_type == "to_cluster"), "\n")
+```
+
+# PCA screening
+
+Used to *screen/inspect* candidate variables, not to relate predictors to a
+response — the actual clustering below runs on raw scaled variables, not
+PC scores, so this step is descriptive/QA only.
+
+```{r pca}
+resp_vars <- c("dens_ha", "mean_hgt", "cv_hgt", "frac_empty_sub",
+               "sp_richness", "CWM_shade", "CWM_drought", "spruce_share", "IV_coniferous")
+
+pca_input <- merged_df %>%
+  #filter(!regen_type %in% c("T0_bare", "T_mature")) %>%
+  select(plot, all_of(resp_vars)) %>%
+  drop_na()
+
+pca_df <- pca_input %>% select(all_of(resp_vars))
+
+cat("=== Correlation among candidate PCA variables ===\n")
+print(round(cor(pca_df), 2))
+
+pca_fit <- prcomp(pca_df, scale. = TRUE)
+summary(pca_fit)
+print(round(pca_fit$rotation[, 1:4], 2))
+
+p_pca1 <- autoplot(pca_fit, data = pca_input, #colour = "has_mature",
+         loadings = TRUE, loadings.label = TRUE, loadings.colour = "black") +
+  labs(title = "PC1 vs PC2") +
+  theme_bw()
+
+p_pca2 <- autoplot(pca_fit, x = 2, y = 3, data = pca_input, #colour = "has_mature",
+         loadings = TRUE, loadings.label = TRUE, loadings.colour = "black") +
+   labs(title = "PC2 vs PC3") +
+  theme_bw()
+
+ggarrange(p_pca1, p_pca2)
+```
+
+# Clustering variables & pairwise inspection
+
+## Is there any clustering visible in raw data?
+
+use main variable characetristics for cluster analysis -> to understand, which of those variables are most importnat.  Do i actually have any visible clusters already present? see on scatter plot. in plot has mature trees present, it is shown by green.
+
+
+```{r pairs-plot}
+pair_df <- merged_df %>%
+  #filter(plot %in% clust_data$plot) %>%
+  select(plot, all_of(resp_vars), has_mature) %>%
+  mutate(mature = ifelse(has_mature, "mat_present", "mat_abs"))
+
+ggpairs(
+  pair_df, columns = resp_vars,
+  mapping = aes(colour = mature),
+  lower = list(continuous = wrap("points", alpha = 0.6, size = 1.3)),
+  upper = list(continuous = wrap("cor", size = 3)),
+  diag  = list(continuous = wrap("densityDiag", alpha = 0.4))
+) +
+  #scale_colour_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
+  #scale_fill_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
+  theme_bw()
+```
+
+
+Overall, it seems there are not very distinct clusters - instead, teh data represent more a continuous type of recpovery. As I think it is impirtant to represent no regeneration option (1 plot), and if mature trees are present ( 10 plots), I will keep them separate. I will run cluster analyses on remaining plots (188 plots).
+
+
+```{r vars}
+# Variables = what/how much is growing (response side), not management
+# (explains how it got there) and not site vars (iLand handles internally).
+vars <- c("dens_ha", "mean_hgt", "spruce_share", "sp_richness", "frac_empty_sub")
+
+clust_data <- merged_df %>%
+  dplyr::filter(regen_type == "to_cluster") %>%
+  dplyr::select(plot, all_of(vars)) %>%
+  drop_na()
+
+cat("Plots entering clustering:", nrow(clust_data), "\n")
+
+X <- clust_data %>% select(-plot)
+cat("=== Correlation of clustering variables (check redundancy) ===\n")
+print(round(cor(X), 2))
+
+X_sc <- scale(X)
+```
+
+
+# PAM clustering — choosing k
+
+PAM clusreing is similar to k-means clustering, but instead of searching for centroid (ideal plot), it searches which plots is teh most representative for the group (eg minimal distances between the plot and teh rest of plots per cluster). I have chosen PAM (&medoid) approach instead of the centroid one, as we will ned as input for iLand specific plot - not onvy averaged continuous variables, but which exact species are present (eg, if plot has species richness = 4, i need to know which exactly species are present there, and I would not know it from centroid approach). 
+
+```{r pam-k-selection}
+set.seed(42)
+sil_scores <- sapply(2:8, function(k) pam(X_sc, k = k, diss = FALSE)$silinfo$avg.width)
+
+cat("Silhouette (avg width) by k:\n")
+for (i in seq_along(sil_scores)) cat(sprintf("  k=%d: %.3f\n", i + 1, sil_scores[i]))
+
+sil_df <- data.frame(k = 2:8, silhouette = sil_scores)
+ggplot(sil_df, aes(k, silhouette)) +
+  geom_line() + geom_point(size = 3) +
+  geom_vline(xintercept = c(2,3), color = c('red', "blue"), lty = c('dotted', "dashed")) +
+  labs(title = "Silhouette width by number of clusters (PAM)",
+       x = "k", y = "mean silhouette width") +
+  theme_bw()
+```
+
+Silhouette width tells us, per plot, how much closer it sits to its own cluster than to the next-nearest one. If averaged across all plots, it tells us what is teh average silhouetted width per number of clusters. eg, teh max silhouette width identify the ideal number of clusters. 
+
+My values are around 0.23, which is rather close to continuous then to trully cluster separation. 
+
+Silhouette widths interpreations: 
+- roughly: >0.5 = strong structure,
+- 0.25-0.5 = weak-to-moderate, 
+- <0.25 = close to a continuum). 
+
+Both k=2 or k=3 can terefore work here. I am analysis how individual clusters looks like if k = 2 vs k = 3. 
+
+## Archetype differentiation: k = 2 vs k = 3
+
+Run PAM on k = 2 and k = 3 to compare how number of plots and their charactersitics change.
+
+```{r pam-helpers}
+run_pam_k <- function(k, X_sc, clust_data, merged_df) {
+  fit <- pam(X_sc, k = k, diss = FALSE)
+  cd  <- clust_data
+  cd$cluster_raw <- fit$clustering
+
+  medoids <- tibble(
+    cluster_raw = seq_len(k),
+    medoid_plot = cd$plot[fit$id.med]
+  )
+
+  merged_k <- merged_df %>%
+    left_join(cd %>% select(plot, cluster_raw), by = "plot") %>%
+    mutate(regen_type = case_when(
+      regen_type %in% c("T0_bare", "T_mature") ~ regen_type,
+      TRUE ~ paste0("T", cluster_raw)
+    ))
+
+  list(fit = fit, clust_data = cd, medoids = medoids, merged = merged_k,
+       silhouette = fit$silinfo$avg.width, k = k)
+}
+
+plot_archetype_boxplots <- function(merged_k, vars_to_plot, k) {
+  regen_labels <- paste0("T", seq_len(k))
+  comparisons  <- combn(regen_labels, 2, simplify = FALSE)
+
+  merged_k %>%
+    filter(regen_type %in% regen_labels) %>%
+    select(regen_type, all_of(vars_to_plot)) %>%
+    pivot_longer(all_of(vars_to_plot), names_to = "variable", values_to = "value") %>%
+    ggplot(aes(regen_type, value, fill = regen_type)) +
+    geom_boxplot(outlier.alpha = 0.1, linewidth = 0.1) +
+    stat_compare_means(comparisons = comparisons, method = "wilcox.test",
+                        p.adjust.method = "BH", label = "p.signif",
+                        hide.ns = TRUE, size = 3) +
+    facet_wrap(~ variable, scales = "free_y", nrow = 1) +
+    scale_fill_brewer(palette = "Set2") +
+    labs(title = paste0("Archetype differentiation on clustering variables, k = ", k)) +
+    theme_bw() + theme(legend.position = "none")
+}
+```
+
+### k = 2
+
+```{r k2-run}
+res_k2 <- run_pam_k(2, X_sc, clust_data, merged_df)
+cat(sprintf("k=2 | silhouette = %.3f | cluster sizes: %s\n",
+            res_k2$silhouette, paste(table(res_k2$clust_data$cluster_raw), collapse = ", ")))
+print(as.data.frame(res_k2$medoids))
+```
+
+```{r k2-boxplots, fig.height=5}
+p_box_k2 <- plot_archetype_boxplots(res_k2$merged, vars, 2)
+```
+
+### k = 3
+
+```{r k3-run}
+res_k3 <- run_pam_k(3, X_sc, clust_data, merged_df)
+cat(sprintf("k=3 | silhouette = %.3f | cluster sizes: %s\n",
+            res_k3$silhouette, paste(table(res_k3$clust_data$cluster_raw), collapse = ", ")))
+print(as.data.frame(res_k3$medoids))
+```
+
+```{r k3-boxplots, fig.height=5}
+p_box_k3 <- plot_archetype_boxplots(res_k3$merged, vars, 3)
+
+ggarrange(p_box_k2, p_box_k3, nrow = 2, ncol = 1)
+```
+
+
+Read the two boxplot panels above side by side: does the k=3 split add a
+genuinely distinct group on one or more variables (a real third mode), or
+does it mainly split one of the k=2 groups into two similar halves (in
+which case k=2 is the more defensible, parsimonious choice even if k=3's
+silhouette is marginally higher)? Pick `FINAL_K` below based on that visual
+read plus the silhouette table, not on silhouette alone.
+
+```{r choose-final-k}
+FINAL_K <- 3   # <-- set after reviewing the two panels above
+res_final <- if (FINAL_K == 2) res_k2 else res_k3
+merged_df_cluster <- res_final$merged
+medoids            <- res_final$medoids %>%
+  mutate(regen_type = paste0("T", cluster_raw))
+
+cat("Final type distribution:\n")
+print(table(merged_df_cluster$regen_type))
+#print(prop.table(merged_df_cluster$regen_type))
+```
+
+### Environmental gradient across the final archetypes
+
+```{r env-boxplots}
+env_vars <- c("elevation", "disturbance_severity", "dist_to_edge",
+              "planting_intensity", "anti_browsing_intensity")
+
+p_env_k2 <- plot_archetype_boxplots(res_k2$merged, env_vars, 2)
+p_env_k3 <- plot_archetype_boxplots(res_k3$merged, env_vars, 3)
+
+ggarrange(p_env_k2, p_env_k3, nrow = 2, ncol = 1)
+```
+
+## Final archetype profiles
+
+```{r archetype-profiles}
+summary_vars <- c("dens_ha", "mean_hgt", "spruce_share", "sp_richness",
+                   "CWM_drought", "frac_empty_sub",
+                   "clear_intensity", "grndwrk_intensity", "logging_trail_intensity",
+                   "planting_intensity", "anti_browsing_intensity",
+                   "elevation", "dist_to_edge", "disturbance_severity", "n_mature")
+
+archetype_profiles <- merged_df_cluster %>%
+  group_by(regen_type) %>%
+  summarise(n = n(),
+            across(all_of(summary_vars), ~ round(mean(.x, na.rm = TRUE), 3)),
+            .groups = "drop") %>%
+  arrange(regen_type)
+
+cat("=== ARCHETYPE PROFILES ===\n")
+print(as.data.frame(
+  archetype_profiles %>%
+    select(regen_type, n, dens_ha, mean_hgt, spruce_share, sp_richness,
+           CWM_drought, frac_empty_sub, disturbance_severity, n_mature)
+))
+```
+
+## Post-hoc elevation check II - different effect among clusters?
+
+Elevation was not a clustering input; this checks whether it structures
+the response across the final archetypes.
+
+```{r elevation-posthoc}
+regen_labels_final <- paste0("T", seq_len(FINAL_K))
+
+driver_long <- merged_df_cluster %>%
+  select(regen_type, elevation, effective_numbers, sp_richness, spruce_share) %>%
+  pivot_longer(c(effective_numbers, sp_richness, spruce_share),
+               names_to = "response", values_to = "value")
+
+ggplot(driver_long, aes(elevation, value)) +
+  geom_point(aes(colour = regen_type), alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, colour = "black") +
+  facet_wrap(~ response, scales = "free_y") +
+  scale_colour_brewer(palette = "Set2") +
+  labs(title = "Elevation vs regeneration response (plot level)",
+       x = "elevation (m)", y = NULL, colour = "type") +
+  theme_bw()
+
+cat("\n=== Elevation ~ response (linear fits) ===\n")
+for (v in c("effective_numbers", "sp_richness", "spruce_share")) {
+  m <- lm(reformulate("elevation", v), data = merged_df_cluster)
+  cat(sprintf("  %-17s slope=%+.4f  R2=%.3f  p=%.3g\n",
+              v, coef(m)[2], summary(m)$r.squared, summary(m)$coefficients[2, 4]))
+}
+
+merged_df_cluster %>%
+  filter(regen_type %in% regen_labels_final) %>%
+  select(regen_type, elevation, effective_numbers, sp_richness, spruce_share) %>%
+  pivot_longer(c(effective_numbers, sp_richness, spruce_share),
+               names_to = "response", values_to = "value") %>%
+  ggplot(aes(elevation, value, colour = regen_type)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  geom_smooth(method = "lm", se = TRUE) +
+  facet_wrap(~ response, scales = "free_y") +
+  scale_colour_brewer(palette = "Set2") +
+  labs(title = "Elevation vs regeneration response, by archetype",
+       x = "elevation (m)", y = NULL, colour = "type") +
+  theme_bw()
+```
+
+```{r elevation-posthoc-gam}
+
+# Restrict to the archetypes that have an elevation gradient worth testing
+# (bare/mature groups aren't relevant to this question)
+gam_data <- merged_df_cluster %>%
+  filter(regen_type %in% regen_labels_final) %>%
+  mutate(regen_type = factor(regen_type))
+
+gam_data_counts <- gam_data %>%
+  left_join(spruce_counts, by = "plot") %>%
+  mutate(
+    n_spruce    = tidyr::replace_na(n_spruce, 0),
+    n_nonspruce = tidyr::replace_na(n_nonspruce, 0)
+  ) %>%
+  filter(n_spruce + n_nonspruce > 0)   # drop any plot with zero total regen stems -- undefined trials for binomial
+
+g_spr_int <- gam(
+  spruce_share ~ regen_type + s(elevation, by = regen_type, k = 4),
+  family = quasibinomial,
+  method = "REML",
+  data = gam_data
+)
+
+#summary(g_spr_int)
+#appraise(g_spr_int)
+
+
+
+g_spr_counts <- gam(
+  cbind(n_spruce, n_nonspruce) ~ regen_type + s(elevation, by = regen_type, k = 4),
+  family = quasibinomial,
+  method = "REML",
+  data = gam_data_counts
+)
+
+summary(g_spr_counts)
+#appraise(g_spr_counts)
+
+
+```
+I tested the effect of elevation on spruce share (quasibinomial)/spruce counts (binomial)- it has significant effect only  in group T1 -> hence, it can't be used as a differentiator for group stratification.
+
+
+
+# iLand initialization: extracting medoid stem data
+
+For each archetype we take its medoid plot and pull that plot's actual
+species x height/dbh-class stems from `sub_veg`. No averaging across
+plots — the archetype inherits the observed assemblage of one real plot.
+
+```{r iland-setup}
+SUBPLOT_AREA_M2     <- 4       # confirmed empirically: n_stems/(n_sub*area)*10000 reproduces dens_ha
+ILAND_STAND_AREA_M2 <- 10000   # 10000 = 1 ha RU; 100 = one 10 m stand pixel
+
+species_map <- c(
+  piab = "piab", fasy = "fasy", pisy = "pisy", lade = "lade",
+  psme = "psme", acps = "acps", acpl = "acpl", potr = "potr",
+  cabe = "cabe", prav = "prav", soau = "soau", soar = "soar",
+  algl = "algl", alin = "alin", saca = "saca",
+  besp = "bepe", qusp = "quro", sasp = "saca", absp = "abal", tisp = "tico",
+  ots1 = NA_character_
+)
+
+norm_dash <- function(x) gsub("[\u2012\u2013\u2014-]", "-", x)
+hgt_map <- data.frame(
+  key         = c("0.2-0.4","0.4-0.6","0.6-0.8","0.8-1.0","1.0-1.3","1.3-2.0","2-4",">4"),
+  height_from = c(0.2, 0.4, 0.6, 0.8, 1.0, 1.3, 2.0, 2.0),
+  height_to   = c(0.4, 0.6, 0.8, 1.0, 1.3, 2.0, 4.0, 4.0),
+  stringsAsFactors = FALSE
+)
+
+build_saplings <- function(plot_key, stand_id) {
+  d <- sub_veg %>%
+    filter(plot == plot_key, !is.na(n), n > 0, vegtype %in% c("small", "advanced")) %>%
+    mutate(key = norm_dash(hgt)) %>%
+    left_join(hgt_map, by = "key")
+
+  if (any(is.na(d$height_from)))
+    warning("Unmapped height class in plot ", plot_key, ": ",
+            paste(unique(d$hgt[is.na(d$height_from)]), collapse = ", "))
+
+  d %>%
+    mutate(n_sub = n_distinct(subplot)) %>%
+    group_by(species, height_from, height_to) %>%
+    summarise(stems = sum(n), n_sub = first(n_sub), .groups = "drop") %>%
+    mutate(
+      iland_species = species_map[species],
+      count = round(stems / (n_sub * SUBPLOT_AREA_M2) * ILAND_STAND_AREA_M2),
+      stand_id = stand_id
+    ) %>%
+    filter(!is.na(iland_species), count > 0) %>%
+    group_by(stand_id, species = iland_species, height_from, height_to) %>%
+    summarise(count = sum(count), .groups = "drop") %>%
+    select(stand_id, species, count, height_from, height_to)
+}
+
+build_trees <- function(plot_key, stand_id) {
+  d <- sub_veg %>% filter(plot == plot_key, !is.na(n), n > 0, vegtype == "mature")
+  if (nrow(d) == 0) return(NULL)
+
+  d %>%
+    mutate(
+      dbh_from = case_when(dbh_est < 20 ~ 10, dbh_est < 40 ~ 20,
+                            dbh_est < 60 ~ 40, TRUE ~ 60),
+      dbh_to   = case_when(dbh_est < 20 ~ 20, dbh_est < 40 ~ 40,
+                            dbh_est < 60 ~ 60, TRUE ~ 80),
+      hd  = round(hgt_est * 100 / dbh_est),
+      age = 0,
+      n_sub = n_distinct(subplot),
+      iland_species = species_map[species],
+      count = round(n / (n_sub * SUBPLOT_AREA_M2) * ILAND_STAND_AREA_M2),
+      stand_id = stand_id
+    ) %>%
+    filter(!is.na(iland_species), count > 0) %>%
+    group_by(stand_id, species = iland_species, dbh_from, dbh_to, hd, age) %>%
+    summarise(count = sum(count), .groups = "drop") %>%
+    select(stand_id, species, count, dbh_from, dbh_to, hd, age)
+}
+```
+
+
+## get list of medoids - also for bare soil and for mature trees present 
+
+
+```{r medoids-full-set}
+medoid_bare_plot <- merged_df_cluster %>% filter(regen_type == "T0_bare") %>% pull(plot)
+
+# i have 10 plots with mature trees - select only one most representative plot (has the lowest distances from teh all other plots) 
+medoid_mature_data <- merged_df_cluster %>%
+  filter(regen_type == "T_mature") %>%
+  select(plot, all_of(vars)) %>%
+  drop_na()
+
+mature_dist <- as.matrix(dist(scale(medoid_mature_data %>% select(-plot))))
+mature_medoid_plot <- medoid_mature_data$plot[which.min(rowSums(mature_dist))]
+
+medoids_all <- bind_rows(
+  medoids,
+  tibble(cluster_raw = NA_integer_, medoid_plot = medoid_bare_plot,   regen_type = "T0_bare"),
+  tibble(cluster_raw = NA_integer_, medoid_plot = mature_medoid_plot, regen_type = "T_mature")
+) %>%
+  mutate(stand_id = row_number()) %>% 
+  rename(plot = medoid_plot)
+
+medoids_all
+```
+
+### Print out the archetypes
+
+# ```{r print_medoids}
+# medoid_plots_names <- medoids_all$medoid_plot
+# 
+# # raw stem-level records (species x subplot x height/dbh class) for each medoid plot
+# medoid_raw_sub <-
+#   sub_veg %>%
+#   filter(plot %in% medoid_plots_names, !is.na(n), n > 0) %>%
+#   select(plot, subplot, species, vegtype, hgt, dbh, n, #hgt_est, dbh_est
+#          ) %>%
+#   left_join(medoids_all %>% select(plot, regen_type), by = "plot") %>%
+#   arrange(regen_type, plot, vegtype, species)
+# 
+# cat("=== Raw stem records for medoid plots ===\n")
+# print(as.data.frame(medoid_raw), row.names = FALSE)
+# 
+# # structural / environmental profile of the same medoid plots, for context
+# medoid_summary <- merged_df_cluster %>%
+#   filter(plot %in% medoid_plots) %>%
+#   select(plot, regen_type, dens_ha, mean_hgt, spruce_share, sp_richness,
+#          frac_empty_sub, n_mature, elevation, disturbance_severity) %>%
+#   arrange(regen_type)
+# 
+# cat("\n=== Structural/environmental profile of medoid plots ===\n")
+# print(as.data.frame(medoid_summary), row.names = FALSE)
+# 
+# 
+# # get sum up info on plot level
+# medoid_raw_plot <- medoid_raw_sub %>%
+#   group_by(regen_type, plot, species, vegtype, hgt, dbh) %>%
+#   summarise(n = sum(n), .groups = "drop") %>%
+#   arrange(regen_type, plot, vegtype, species)
+# 
+# print(medoid_raw_plot)
+# 
+# ```
+
+# What is my species composition and characteristics based on frequency of archetypes?
+```{r sanity-check}
+
+# 1. stems per cluster, ALL member plots (not just medoids), by species
+cluster_species <- sub_veg %>%
+  filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced", "mature")) %>%
+  inner_join(merged_df_cluster %>% select(plot, regen_type), by = "plot") %>%
+  group_by(regen_type, species) %>%
+  summarise(n_stems = sum(n), .groups = "drop") %>%
+  group_by(regen_type) %>%
+  mutate(pct = round(100 * n_stems / sum(n_stems), 1)) %>%
+  arrange(regen_type, desc(pct))
+
+print(as.data.frame(cluster_species), row.names = FALSE)
+
+cat("\nPlots per type:\n"); 
+print(table(merged_df_cluster$regen_type))
+
+# 2. overall pooled composition (all plots, all types) -- the reference total
+overall_species <- sub_veg %>%
+  filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced", "mature")) %>%
+  group_by(species) %>%
+  summarise(n_stems = sum(n), .groups = "drop") %>%
+  mutate(pct = round(100 * n_stems / sum(n_stems), 1)) %>%
+  arrange(desc(pct))
+
+print(as.data.frame(overall_species), row.names = FALSE)
+
+# 3. integrity check: do the cluster totals actually sum to the pooled total?
+cat("\nSum across clusters:", sum(cluster_species$n_stems),
+    "| Pooled total:", sum(overall_species$n_stems), "\n")
+
+
+# Sanity check II - species composition and stem numebrs 
+# 
+# plot_counts <- table(merged_df_cluster$regen_type)
+# 
+# type_weights <- tibble(
+#   regen_type = names(plot_counts),
+#   n_plots    = as.integer(plot_counts),
+#   weight     = n_plots / sum(n_plots)
+# )
+# 
+# # landscape-weighted stem density per species
+# landscape_species <- medoid_species_all %>%
+#   left_join(type_weights %>% select(regen_type, weight), by = "regen_type") %>%
+#   mutate(weighted_count = count * weight) %>%
+#   group_by(species) %>%
+#   summarise(weighted_count = sum(weighted_count), .groups = "drop") %>%
+#   mutate(pct = round(100 * weighted_count / sum(weighted_count), 1)) %>%
+#   arrange(desc(pct))
+# 
+
+
+```
+
+
+```{r write-iland-files}
+out_dir <- "outData/iland_init"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+for (i in seq_len(nrow(medoids_all))) {
+  pk  <- medoids_all$plot[i]
+  sid <- medoids_all$stand_id[i]
+  typ <- medoids_all$regen_type[i]
+
+  sap <- build_saplings(pk, sid)
+  tre <- build_trees(pk, sid)
+
+  cat(sprintf("\n--- %s | medoid plot %s | stand_id %d ---\n", typ, pk, sid))
+  cat("saplings:\n"); print(as.data.frame(sap))
+  write.csv(sap, file.path(out_dir, sprintf("iniplt_%s_sap.txt", typ)),
+            row.names = FALSE, quote = TRUE)
+
+  if (!is.null(tre)) {
+    cat("mature trees:\n"); print(as.data.frame(tre))
+    write.csv(tre, file.path(out_dir, sprintf("iniplt_%s_tree.txt", typ)),
+              row.names = FALSE, quote = TRUE)
+  } else {
+    cat("mature trees: none (empty tree layer)\n")
+  }
+}
+
+cat("\nT0_bare -> initialize as bare soil (no init file needed).\n")
+```
+
+# Export
+
+```{r export}
+write.csv(merged_df_cluster,  "outData/CZ_plots_archetypes.csv",   row.names = FALSE)
+write.csv(archetype_profiles, "outData/CZ_archetype_profiles.csv", row.names = FALSE)
+write.csv(medoids,            "outData/CZ_archetype_medoids.csv",  row.names = FALSE)
+
+cat("Done. iLand init files in ./outData/iland_init/\n")
+```
+
+# Session info
+
+```{r session-info}
+sessionInfo()
+```
+
+
+
