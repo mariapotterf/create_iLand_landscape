@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════
 #  POST-BROUK REGENERATION CLUSTERING
-#  Goal: group 208 CZ field plots into ecologically
+#  Goal: group CZ field plots into ecologically
 #  meaningful regeneration archetypes for iLand initialization - only year 2025, the most recent status
 #
 #  Input:  env_chars_subplots.gpkg
@@ -14,6 +14,8 @@
 #  5. Cluster remaining plots on composition + structure
 #  6. Validate & describe archetypes
 # ══════════════════════════════════════════════════════════
+gc()
+
 
 library(sf)
 library(dplyr)
@@ -38,23 +40,24 @@ plot_v_all_countries <- terra::vect("../../r_post_brouk/outDataShare/Karim_AEF/c
 plot_v_cz <- plot_v_all_countries[plot_v_all_countries$country_name == "Czech Republic" & 
                                   plot_v_all_countries$year == 2025, ]
 plot_df <- as.data.frame(plot_v_cz) %>% 
-  select(-subplot, - plot_id, - country, - region)
+  select(-subplot, - plot_id, - country, - region) %>% 
+  mutate(plot = as.character(plot))
 
 # get raw data of stems, species, ... on subplot level
 sub_veg <- fread("../../r_post_brouk/outData/dat_full_species_all_countries.csv") %>%
   filter(country_name == "Czechia" & year == 2025) %>%
   mutate(
-    plot      = factor(plot)
+    plot      = as.character(plot)
   )
 
 # export only czechia for Claude analysis
-#fwrite(dat_veg, "../../r_post_brouk/outData/dat_full_species_Czechia_2025.csv")
+#fwrite(sub_veg, "../../r_post_brouk/outData/dat_full_species_Czechia_2025.csv")
 #fwrite(plot_df, "../../r_post_brouk/outData/env_chars_Czechia_2025.csv")
 
 
-
-# Any trend with elevation -------------------------------------------------
-# is there any trend with elevation? share of spruce, species richness? check again on plot level ----
+# inspect data -------------------------------------------------------------
+# Any trend with elevation? -------------------------------------------------
+# is there any trend with elevation? share of spruce, species richness? ----
 
 
 ## low k so it can't overfit; spruce_share is a 0–1 proportion → quasibinomial
@@ -81,11 +84,11 @@ p2 <- ggplot(plot_df, aes(elevation, spruce_share)) +
 ggarrange(p1, p2)
 
 
-# Make extra data - how many subplots are empty? -----------------------------
+## Make extra data - how many subplots are empty? -----------------------------
 
 ## get emptiness - how many subplots are empty per plot? ---------------------------------------------------------
-## --- emptiness from dat_veg: a subplot is empty if it has zero stems ---
-empty_by_plot <- dat_veg |>
+## --- emptiness from sub_veg: a subplot is empty if it has zero stems ---
+empty_by_plot <- sub_veg |>
   group_by(plot, subplot) |>
   summarise(sub_stems = sum(n, na.rm = TRUE), .groups = "drop") |>
   group_by(plot) |>
@@ -129,7 +132,7 @@ merged_df <- plot_df %>%
     has_mature = n_mature > 0
   )
 
-cat("Plots with >=1 residual mature tree:", sum(plots$has_mature), "\n\n")
+cat("Plots with >=1 residual mature tree:", sum(merged_df$has_mature), "\n\n")
 
 # I have 10 plots with presence of mature trees
 
@@ -159,15 +162,14 @@ cat("Remaining for clustering:  ", sum(merged_df$regen_type == "to_cluster"), "\
 
 #
 
-
-# PCA: identify teh main drivers 
-# get teh main drivers - for PCA ---------------------------
+# analyzed the data -----------------------------------------------
+## PCA:  get teh main drivers - for PCA ---------------------------
 resp_vars <- c("dens_ha", "mean_hgt", "cv_hgt", "frac_empty_sub",
                "sp_richness", #"shannon_sp", "evenness_sp", "effective_numbers",
                "CWM_shade", "CWM_drought", "spruce_share", "IV_coniferous")
 
 pca_df <- merged_df %>%
-  filter(regen_type != "T0_bare") %>%     # bare has no meaningful position; join regen_type on first if not present
+  filter(regen_type %notin% c("T0_bare", "T_mature")) %>%     # bare has no meaningful position; join regen_type on first if not present
   select(all_of(resp_vars)) %>%
   drop_na()
 
@@ -179,7 +181,8 @@ summary(pca_fit)            # variance explained per PC
 print(round(pca_fit$rotation[, 1:3], 2))   # loadings on PC1-3
 
 library(ggfortify)
-autoplot(pca_fit, data = merged_df  %>% filter(regen_type != "T0_bare") %>% drop_na(all_of(resp_vars)),
+autoplot(pca_fit, data = merged_df  %>% filter(regen_type %notin% c("T0_bare", "T_mature")) %>% 
+           drop_na(all_of(resp_vars)),
          colour = "regen_type",
          loadings = TRUE, loadings.label = TRUE, loadings.colour = "black") +
   scale_colour_brewer(palette = "Set2") +
@@ -192,8 +195,7 @@ autoplot(pca_fit, data = merged_df  %>% filter(regen_type != "T0_bare") %>% drop
 
 # 4. PAM (k-medoids) clustering of stocked plots
 # ---------------------------------------------------------------------
-# Variables = what/how-much is growing (response side). NOT management
-# (explains how it got there) and NOT site vars (iLand handles internally).
+# Variables = what/how-much is growing (response side). 
 #
 # NOTE on redundancy: IV_conif + IV_decid ~= 1 (collinear) -> IV_decid
 # dropped by default. spruce_share and IV_conif also overlap; inspect the
@@ -224,9 +226,10 @@ X_sc <- scale(X)
 ### see plots 1:1 to checsk wheather there are any clusters possible ---------------------------------
 # the 5 variables that entered PAM — edit names to match your clust_data
 
-pair_df <- merged_df %>%                                    # plots that entered clustering
-  select(plot, all_of(vars)) %>% 
-  left_join(plots %>% select(plot, has_mature, n_mature), by = "plot") %>%
+pair_df <- 
+  merged_df %>%                                    # plots that entered clustering
+  select(plot, all_of(vars), has_mature) %>% 
+ # left_join(plots %>% select(plot, has_mature, n_mature), by = "plot") %>%
   mutate(mature = ifelse(has_mature, "mat_present", "mat_abs"))
 
 ggpairs(
@@ -294,7 +297,7 @@ merged_df_cluster <- merged_df %>%
     TRUE                                       ~ paste0("T", cluster_raw)
   ))
 
-cat("Final type distribution:\n"); print(table(plots$regen_type)); cat("\n")
+cat("Final type distribution:\n"); print(table(merged_df_cluster$regen_type)); cat("\n")
 
 ### Clusters profiles: get a boxplot -----------------
 # do only for regeneration clusters
