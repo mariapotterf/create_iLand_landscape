@@ -705,58 +705,34 @@ print(medoid_raw_plot)
 ```{r sanity-check}
 
 # 1. stems per cluster, ALL member plots (not just medoids), by species
-cluster_species <- sub_veg %>%
-  filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced", "mature")) %>%
+simul_species_unique <- sub_veg %>%
+  filter(!is.na(n), n > 0) %>%
   inner_join(merged_df_cluster %>% select(plot, regen_type), by = "plot") %>%
-  group_by(regen_type, species) %>%
-  summarise(n_stems = sum(n), .groups = "drop") %>%
-  group_by(regen_type) %>%
-  mutate(pct = round(100 * n_stems / sum(n_stems), 1)) %>%
-  arrange(regen_type, desc(pct))
-
-print(as.data.frame(cluster_species), row.names = FALSE)
-
-cat("\nPlots per type:\n"); 
-print(table(merged_df_cluster$regen_type))
+  filter(plot %in% medoid_plots_names) %>% 
+  distinct(species) %>% 
+  pull(species) 
+  
 
 # 2. overall pooled composition (all plots, all types) -- the reference total
-real_species <- sub_veg %>%
+real_species_unique <- sub_veg %>%
+  filter(!is.na(n), n > 0) %>% 
+   distinct(species) %>% 
+  pull(species) 
+
+
+missing_from_simul_v <- setdiff(real_species_unique, simul_species_unique)
+
+# get shares
+real_species_shares <- sub_veg %>%
   filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced", "mature")) %>%
   group_by(species) %>%
   summarise(n_stems = sum(n), .groups = "drop") %>%
   mutate(pct = round(100 * n_stems / sum(n_stems), 1)) %>%
-  arrange(desc(pct))
+  arrange(desc(pct)) %>% 
+   mutate(missing_from_simul = species %in% missing_from_simul_v)
 
-print(as.data.frame(real_species), row.names = FALSE)
-
-# 3. integrity check: do the cluster totals actually sum to the pooled total?
-cat("\nSum across clusters:", sum(cluster_species$n_stems),
-    "| Pooled total:", sum(overall_species$n_stems), "\n")
-
-
-### !!! here - compare species richness - can i add exra species into clusters with hihest richness?
-
-# Sanity check II - species composition and stem numebrs 
-# 
-# plot_counts <- table(merged_df_cluster$regen_type)
-# 
-# type_weights <- tibble(
-#   regen_type = names(plot_counts),
-#   n_plots    = as.integer(plot_counts),
-#   weight     = n_plots / sum(n_plots)
-# )
-# 
-# # landscape-weighted stem density per species
-# landscape_species <- medoid_species_all %>%
-#   left_join(type_weights %>% select(regen_type, weight), by = "regen_type") %>%
-#   mutate(weighted_count = count * weight) %>%
-#   group_by(species) %>%
-#   summarise(weighted_count = sum(weighted_count), .groups = "drop") %>%
-#   mutate(pct = round(100 * weighted_count / sum(weighted_count), 1)) %>%
-#   arrange(desc(pct))
-# 
-
-
+real_species_shares
+# what is teh best way to represent the missing ones in my cluster?
 ```
 
 ### Stratify plots per elevation
