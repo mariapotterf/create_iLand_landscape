@@ -28,7 +28,7 @@ supply the actual observed species/stem data used to initialize synthetic
 iLand landscapes.
 
 
-```{r libraries}
+```{r libraries, warning=FALSE}
 library(sf)
 library(dplyr)
 library(tidyr)
@@ -137,7 +137,9 @@ use main variable characetristics for cluster analysis -> to understand, which o
 
 
 
-# Deriving regeneration flags
+# Deriving extra data:
+
+## Regeneration flags
 
 ```{r emptiness}
 empty_by_plot <- sub_veg %>%
@@ -154,21 +156,22 @@ empty_by_plot <- sub_veg %>%
   ) %>%
   mutate(plot = as.character(plot))
 
-cat("=== Regeneration status ===\n")
-cat("ALL subplots empty (truly bare):", sum(empty_by_plot$all_empty),
-    sprintf("(%.1f%%)\n", 100 * mean(empty_by_plot$all_empty)))
-cat("ANY subplot empty:              ", sum(empty_by_plot$any_empty),
-    sprintf("(%.1f%%)\n", 100 * mean(empty_by_plot$any_empty)))
-cat("NO empty subplots:              ", sum(!empty_by_plot$any_empty),
-    sprintf("(%.1f%%)\n\n", 100 * mean(!empty_by_plot$any_empty)))
-cat("Empty-subplot distribution:\n"); print(table(empty_by_plot$n_empty_sub))
+# cat("=== Regeneration status ===\n")
+# cat("ALL subplots empty (truly bare):", sum(empty_by_plot$all_empty),
+#     sprintf("(%.1f%%)\n", 100 * mean(empty_by_plot$all_empty)))
+# cat("ANY subplot empty:              ", sum(empty_by_plot$any_empty),
+#     sprintf("(%.1f%%)\n", 100 * mean(empty_by_plot$any_empty)))
+# cat("NO empty subplots:              ", sum(!empty_by_plot$any_empty),
+#     sprintf("(%.1f%%)\n\n", 100 * mean(!empty_by_plot$any_empty)))
+# cat("Empty-subplot distribution:\n"); print(table(empty_by_plot$n_empty_sub))
 ```
+## Presence of mature trees
 
 Mature-tree presence (dbh >= 10 cm, `vegtype == "mature"`) is flagged at
 plot level so we can *test* whether a residual-overstory archetype emerges,
 rather than assume it:
 
-```{r mature-flag}
+```{r mature-flag, warning=F}
 mature_by_plot <- sub_veg %>%
   filter(!is.na(n), n > 0, vegtype == "mature") %>%
   group_by(plot) %>%
@@ -185,7 +188,7 @@ merged_df <- plot_df %>%
 cat("Plots with >=1 residual mature tree:", sum(merged_df$has_mature), "\n")
 ```
 
-# Rule-based pre-classification
+## Rule-based pre-classification
 
 Regeneration status is more a gradient than discrete groups, but two edge
 cases are structurally distinct enough to pull out *before* clustering:
@@ -278,7 +281,7 @@ ggarrange(p_pca1, p_pca2)
 Overall, it seems there are not very distinct clusters - instead, teh data represent more a continuous type of recpovery. As I think it is impirtant to represent no regeneration option (1 plot), and if mature trees are present ( 10 plots), I will keep them separate. I will run cluster analyses on remaining plots (188 plots).
 
 
-```{r vars}
+```{r vars, warning=F}
 # Variables = what/how much is growing (response side), not management
 # (explains how it got there) and not site vars (iLand handles internally).
 vars <- c("dens_ha", "mean_hgt", "spruce_share", "sp_richness", "frac_empty_sub")
@@ -300,9 +303,9 @@ X_sc <- scale(X)
 
 # PAM clustering — choosing k
 
-PAM clusreing is similar to k-means clustering, but instead of searching for centroid (ideal plot), it searches which plots is teh most representative for the group (eg minimal distances between the plot and teh rest of plots per cluster). I have chosen PAM (&medoid) approach instead of the centroid one, as we will ned as input for iLand specific plot - not onvy averaged continuous variables, but which exact species are present (eg, if plot has species richness = 4, i need to know which exactly species are present there, and I would not know it from centroid approach). 
+PAM clustering is similar to k-means clustering, but instead of searching for centroid (ideal plot), it searches which plots is teh most representative for the group (eg minimal distances between the plot and teh rest of plots per cluster). I have chosen PAM (&medoid) approach instead of the centroid one, as we will ned as input for iLand specific plot - not onvy averaged continuous variables, but which exact species are present (eg, if plot has species richness = 4, i need to know which exactly species are present there, and I would not know it from centroid approach). 
 
-```{r pam-k-selection}
+```{r pam-k-selection, warning = F }
 set.seed(42)
 sil_scores <- sapply(2:8, function(k) pam(X_sc, k = k, diss = FALSE)$silinfo$avg.width)
 
@@ -421,20 +424,18 @@ cat("Final type distribution:\n")
 print(table(merged_df_cluster$regen_type))
 #print(prop.table(merged_df_cluster$regen_type))
 ```
+### Final archetypes profiles and counts
 
-### Environmental gradient across the final archetypes
+```{r final_archetypes-counts} 
 
-```{r env-boxplots}
-env_vars <- c("elevation", "disturbance_severity", "dist_to_edge",
-              "planting_intensity", "anti_browsing_intensity")
+# Counts
+print(table(merged_df_cluster$regen_type))
 
-p_env_k2 <- plot_archetype_boxplots(res_k2$merged, env_vars, 2)
-p_env_k3 <- plot_archetype_boxplots(res_k3$merged, env_vars, 3)
+# Proportions
+print(prop.table(table(merged_df_cluster$regen_type)))
 
-ggarrange(p_env_k2, p_env_k3, nrow = 2, ncol = 1)
+
 ```
-
-## Final archetype profiles
 
 ```{r archetype-profiles, warning=FALSE}
 summary_vars <- c("dens_ha", "mean_hgt", "spruce_share", "sp_richness",
@@ -458,7 +459,19 @@ print(as.data.frame(
 ))
 ```
 
-## Post-hoc elevation check II - different effect among clusters?
+### Environmental gradient across the final archetypes
+
+```{r env-boxplots}
+env_vars <- c("elevation", "disturbance_severity", "dist_to_edge",
+              "planting_intensity", "anti_browsing_intensity")
+
+p_env_k2 <- plot_archetype_boxplots(res_k2$merged, env_vars, 2)
+p_env_k3 <- plot_archetype_boxplots(res_k3$merged, env_vars, 3)
+
+ggarrange(p_env_k2, p_env_k3, nrow = 2, ncol = 1)
+```
+
+#### Post-hoc elevation check II - different effect among clusters?
 
 Elevation was not a clustering input; this checks whether it structures
 the response across the final archetypes.
@@ -623,10 +636,10 @@ build_trees <- function(plot_key, stand_id) {
 ```
 
 
-## get list of medoids - also for bare soil and for mature trees present 
+## get plot ID of all medoids  (mature + bare + 3x regeneration)
 
 
-```{r medoids-full-set}
+```{r medoids-full-set, warning=FALSE}
 medoid_bare_plot <- merged_df_cluster %>% filter(regen_type == "T0_bare") %>% pull(plot)
 
 # i have 10 plots with mature trees - select only one most representative plot (has the lowest distances from teh all other plots) 
@@ -649,10 +662,10 @@ medoids_all <- bind_rows(
 medoids_all
 ```
 
-### Print out the archetypes
+### Print out the medoid: species composition
 
 ```{r print_medoids}
- medoid_plots_names <- medoids_all$mplot
+ medoid_plots_names <- medoids_all$plot
 
  # raw stem-level records (species x subplot x height/dbh class) for each medoid plot
  medoid_raw_sub <-
@@ -687,7 +700,8 @@ print(medoid_raw_plot)
 #
 ```
 
-# What is my species composition and characteristics based on frequency of archetypes?
+# Real vs similated landscape level composition 
+
 ```{r sanity-check}
 
 # 1. stems per cluster, ALL member plots (not just medoids), by species
@@ -706,19 +720,21 @@ cat("\nPlots per type:\n");
 print(table(merged_df_cluster$regen_type))
 
 # 2. overall pooled composition (all plots, all types) -- the reference total
-overall_species <- sub_veg %>%
+real_species <- sub_veg %>%
   filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced", "mature")) %>%
   group_by(species) %>%
   summarise(n_stems = sum(n), .groups = "drop") %>%
   mutate(pct = round(100 * n_stems / sum(n_stems), 1)) %>%
   arrange(desc(pct))
 
-print(as.data.frame(overall_species), row.names = FALSE)
+print(as.data.frame(real_species), row.names = FALSE)
 
 # 3. integrity check: do the cluster totals actually sum to the pooled total?
 cat("\nSum across clusters:", sum(cluster_species$n_stems),
     "| Pooled total:", sum(overall_species$n_stems), "\n")
 
+
+### !!! here - compare species richness - can i add exra species into clusters with hihest richness?
 
 # Sanity check II - species composition and stem numebrs 
 # 
@@ -742,6 +758,111 @@ cat("\nSum across clusters:", sum(cluster_species$n_stems),
 
 
 ```
+
+### Stratify plots per elevation
+
+get 3x3 point per elevation belts - can be any values. this is needed to generate approaximate climatic condistions as input for iLand.
+
+```{r medoid-elev-check, warning=FALSE}
+
+library(sf)
+# elevation (and coordinates) of the currently identified medoids
+medoid_elev <- merged_df_cluster %>%
+  filter(plot %in% medoid_plots_names) %>%
+  #left_join(medoids_all %>% select(plot, regen_type), by = "plot") %>%
+  select(plot, regen_type, elevation) %>%   # adjust x, y to your actual coordinate column names
+  arrange(elevation)
+
+print(medoid_elev)
+
+# need to get plot_df coordinates from sub_veg data
+plot_xy <- 
+  sub_veg %>%
+  group_by(plot) %>%
+  summarise(x = mean(x, na.rm = TRUE),
+            y = mean(y, na.rm = TRUE),
+            .groups = "drop") %>%
+  left_join(plot_df %>% dplyr::select(plot, elevation), by = "plot")
+
+
+# filter medois and extra 2 plots per each elev belt -----------
+# keep medoids: i have 3 plots in belt 400-500
+kept_medoids <- plot_xy %>%
+  filter(plot %in% medoid_plots_names) %>% 
+   left_join(merged_df_cluster %>% select(plot, regen_type), by = "plot") %>%
+  select(plot, regen_type, elevation, x, y)
+
+# subset 2: 2 random extra plots from each of the remaining bands
+set.seed(123)  # fix for reproducibility; change/remove for a different draw
+
+elev_breaks <- c(400, 500, 600, Inf)
+elev_labels <- c("400-500", "500-600", ">600")
+
+random_fill <- plot_xy %>%
+  mutate(elev_band = cut(elevation, breaks = elev_breaks, labels = elev_labels,
+                          right = FALSE, include.lowest = TRUE)) %>%
+  filter(!plot %in% medoid_plots_names,
+         elev_band %in% c("500-600", ">600")) %>%  # remove already selected plots = real medoid
+  group_by(elev_band) %>%
+  slice_sample(n = 2) %>%
+  ungroup() %>%
+  left_join(merged_df_cluster %>% select(plot, regen_type), by = "plot") %>%
+  select(plot, regen_type, elevation, x, y)
+
+print(random_fill)
+final_9 <- bind_rows(kept_medoids, random_fill) %>%
+  arrange(elevation)
+
+print(final_9)
+
+
+final_9_sf <- final_9 %>%
+  mutate(type = if_else(plot %in% medoid_plots_names, "Medoid", "Random fill"))
+
+
+# convert to sf object
+final_9_sf <- st_as_sf(final_9, coords = c("x", "y"), crs = 3035, remove = FALSE)
+plot_xy_sf <- st_as_sf(plot_xy, coords = c("x", "y"), crs = 3035, remove = FALSE)
+
+# show on map
+ggplot() +
+  geom_sf(data = plot_xy_sf, color = 'grey', size = 1.6, alpha = 0.55) +
+  # the 9 selected plots, categorical highlight
+  geom_sf(data = final_9_sf, color = "red", size = 3)
+```
+
+
+
+```{r write-shp-9final, warning=TRUE}
+final_sf_3035 <- final_9 %>%
+  rename(x_3035 = x, y_3035 = y) %>%
+  st_as_sf(coords = c("x_3035", "y_3035"), crs = 3035, remove = FALSE)
+
+final_sf_wgs84 <- st_transform(final_sf_3035, crs = 4326)
+coords_wgs84 <- st_coordinates(final_sf_wgs84)
+final_sf_wgs84 <- final_sf_wgs84 %>%
+  mutate(lon_wgs84 = coords_wgs84[, 1],
+         lat_wgs84 = coords_wgs84[, 2])
+# 
+# out_dir <- "outData/medoid_9plots"
+# dir.create(out_dir, showWarnings = FALSE)
+# 
+# st_write(final_sf_3035, file.path(out_dir, "plots_by_elev_3035.gpkg"),
+#          layer = "medoid_9plots", delete_dsn = TRUE)
+# st_write(final_sf_3035, file.path(out_dir, "plots_by_elev_3035.shp"),
+#          delete_dsn = TRUE)
+# 
+# st_write(final_sf_wgs84, file.path(out_dir, "plots_by_elev__wgs84.gpkg"),
+#          layer = "medoid_9plots", delete_dsn = TRUE)
+# st_write(final_sf_wgs84, file.path(out_dir, "plots_by_elev__wgs84.shp"),
+#          delete_dsn = TRUE)
+
+
+
+```
+
+
+
 
 
 ```{r write-iland-files}

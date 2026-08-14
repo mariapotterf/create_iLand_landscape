@@ -6,4 +6,9 @@
 /maps/
 /outData/
 /rawData/
+
+
+
+# ignore reports and extra fiels from RMarkdown
 *.html
+*_files/
