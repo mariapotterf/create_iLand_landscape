@@ -1,0 +1,6 @@
+"stand_id","species","count","height_from","height_to"
+3,"bepe",625,1.3,2
+3,"piab",1250,0.4,0.6
+3,"piab",625,0.6,0.8
+3,"piab",2500,1.3,2
+3,"quro",625,0.2,0.4
