@@ -842,40 +842,40 @@ final_sf_wgs84 <- final_sf_wgs84 %>%
 
 
 ```{r write-iland-files}
-out_dir <- "outData/iland_init"
-dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+#out_dir <- "outData/iland_init"
+#dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
-for (i in seq_len(nrow(medoids_all))) {
-  pk  <- medoids_all$plot[i]
-  sid <- medoids_all$stand_id[i]
-  typ <- medoids_all$regen_type[i]
+# for (i in seq_len(nrow(medoids_all))) {
+#   pk  <- medoids_all$plot[i]
+#   sid <- medoids_all$stand_id[i]
+#   typ <- medoids_all$regen_type[i]
+# 
+#   sap <- build_saplings(pk, sid)
+#   tre <- build_trees(pk, sid)
+# 
+#   cat(sprintf("\n--- %s | medoid plot %s | stand_id %d ---\n", typ, pk, sid))
+#   cat("saplings:\n"); print(as.data.frame(sap))
+#   write.csv(sap, file.path(out_dir, sprintf("iniplt_%s_sap.txt", typ)),
+#             row.names = FALSE, quote = TRUE)
+# 
+#   if (!is.null(tre)) {
+#     cat("mature trees:\n"); print(as.data.frame(tre))
+#     write.csv(tre, file.path(out_dir, sprintf("iniplt_%s_tree.txt", typ)),
+#               row.names = FALSE, quote = TRUE)
+#   } else {
+#     cat("mature trees: none (empty tree layer)\n")
+#   }
+# }
 
-  sap <- build_saplings(pk, sid)
-  tre <- build_trees(pk, sid)
-
-  cat(sprintf("\n--- %s | medoid plot %s | stand_id %d ---\n", typ, pk, sid))
-  cat("saplings:\n"); print(as.data.frame(sap))
-  write.csv(sap, file.path(out_dir, sprintf("iniplt_%s_sap.txt", typ)),
-            row.names = FALSE, quote = TRUE)
-
-  if (!is.null(tre)) {
-    cat("mature trees:\n"); print(as.data.frame(tre))
-    write.csv(tre, file.path(out_dir, sprintf("iniplt_%s_tree.txt", typ)),
-              row.names = FALSE, quote = TRUE)
-  } else {
-    cat("mature trees: none (empty tree layer)\n")
-  }
-}
-
-cat("\nT0_bare -> initialize as bare soil (no init file needed).\n")
+#cat("\nT0_bare -> initialize as bare soil (no init file needed).\n")
 ```
 
 # Export
 
 ```{r export}
-write.csv(merged_df_cluster,  "outData/CZ_plots_archetypes.csv",   row.names = FALSE)
-write.csv(archetype_profiles, "outData/CZ_archetype_profiles.csv", row.names = FALSE)
-write.csv(medoids,            "outData/CZ_archetype_medoids.csv",  row.names = FALSE)
+# write.csv(merged_df_cluster,  "outData/CZ_plots_archetypes.csv",   row.names = FALSE)
+# write.csv(archetype_profiles, "outData/CZ_archetype_profiles.csv", row.names = FALSE)
+# write.csv(medoids,            "outData/CZ_archetype_medoids.csv",  row.names = FALSE)
 
 cat("Done. iLand init files in ./outData/iland_init/\n")
 ```
