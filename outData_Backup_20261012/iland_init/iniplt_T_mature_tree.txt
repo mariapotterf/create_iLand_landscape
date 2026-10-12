@@ -1,0 +1,2 @@
+"stand_id","species","count","dbh_from","dbh_to","hd","age"
+5,"cabe",5000,20,40,67,0

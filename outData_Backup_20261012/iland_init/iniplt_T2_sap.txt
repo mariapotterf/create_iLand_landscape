@@ -1,0 +1,5 @@
+"stand_id","species","count","height_from","height_to"
+2,"cabe",833,0.2,0.4
+2,"cabe",1667,2,4
+2,"fasy",2500,1.3,2
+2,"quro",833,0.4,0.6

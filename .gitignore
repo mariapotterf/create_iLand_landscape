@@ -2,13 +2,10 @@
 .Rhistory
 .RData
 .Ruserdata
-
 /maps/
 /outData/
 /rawData/
-
-
-
 # ignore reports and extra fiels from RMarkdown
 *.html
 *_files/
+outData_Backup_20261012/

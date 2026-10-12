@@ -1,0 +1,8 @@
+"stand_id","species","count","height_from","height_to"
+5,"abal",1000,0.2,0.4
+5,"abal",1000,0.6,0.8
+5,"acps",1500,1.3,2
+5,"cabe",1500,2,4
+5,"fasy",1000,0.4,0.6
+5,"fasy",1000,0.6,0.8
+5,"soar",500,2,4
