@@ -15,26 +15,27 @@ target_frac <- 0.386
 target_size <- round(target_frac * n * n)  # 3860 cells = 3.86 ha
 
 # Coordinates — from real Kostelec landscape files
-# (standgrid_20260330.asc and ru_ids_20260330.asc)
 # CRS: Křovák EPSG:5514
-XLL <- -809850 - 700   # = -810550
-YLL <- -1161450 - 700  # = -1162150
+XLL <- -713900
+YLL <- -1068600
+stopifnot(XLL %% res_ru == 0, YLL %% res_ru == 0)   # stays on the Kostelec 100 m lattice
 
-# iLand stand grid values — confirmed from standgrid_20260330.asc:
+# iLand stand grid values — confirmed from stands_ids_Hran_Kost_gt_1000m2:
 #   0   = NODATA (truly outside, non-forested) — written as NODATA_value
 #  -2   = forested outside belt (provides seed rain into disturbed area)
 #  -1   = non-forested outside (no trees, no seeds) — not used here
 #   1   = disturbed stand (post-bark-beetle, C4 2022)
 #   2   = mature forest stand
-VAL_DISTURBED      <-  1L
-VAL_MATURE         <-  2L
+VAL_DISTURBED      <-  1L   # disturbed (gap, regenerating area)
+VAL_MATURE         <-  2L   # mature forest (undisturbed, spruce dominanted, ~ 100 years old)
 VAL_BELT           <- -2L   # forested outside — enables seed rain
 VAL_NODATA_STAND   <-  0L   # NODATA for stand grid
 
-# RU grid values — confirmed from ru_ids_20260330.asc:
+# RU grid values — confirmed from ru3_hran_kost.asc:
 #   0      = outside (NODATA)
-#   1,2,.. = sequential RU IDs for active cells
+#   1,2,.. = sequential RU IDs for active cells, I will have the same condistions everywhere = 1
 VAL_NODATA_RU      <-  0L
+VAL_ENV_SAME        <- 4987L     # one Kostelec environment ID (same climate& soil everywhere, Katka can change)
 
 # ══════════════════════════════════════════════════════════
 #  HELPER: add forested belt around inner grid
@@ -169,12 +170,13 @@ make_ru_grid <- function() {
   id <- 1L
   for (i in (belt_ru+1):(n_ru-belt_ru)) {
     for (j in (belt_ru+1):(n_ru-belt_ru)) {
-      g[i, j] <- id
-      id <- id + 1L
+      g[i, j] <- VAL_ENV_SAME# id
+     # id <- id + 1L
     }
   }
   
-  n_active <- id - 1L
+  #n_active <- id - 1L
+  n_active <- sum(g != VAL_NODATA_RU)
   cat(sprintf(
     "RU grid: %d×%d cells @ %d m | %d active RUs | belt = %d cells\n",
     n_ru, n_ru, res_ru, n_active, belt_ru))
@@ -245,11 +247,9 @@ cat(sprintf("Unique values: %s\n",
 cat("\n=== Sanity checks (r_ru) ===\n")
 cat(sprintf("Dimensions: %d rows × %d cols (expect 14×14)\n",
             nrow(r_ru), ncol(r_ru)))
-cat(sprintf("Active RUs (>0): %d (expect 100)\n",
-            sum(values(r_ru) > 0)))
-cat(sprintf("Max RU ID: %d (expect 100)\n",
-            max(values(r_ru))))
-
+cat(sprintf("Active RUs (>0): %d (expect 100)\n", sum(values(r_ru) > 0)))
+cat(sprintf("RU values: %s (expect 0, %d)\n",
+            paste(sort(unique(values(r_ru))), collapse = ", "), VAL_ENV_SAME))
 # ══════════════════════════════════════════════════════════
 #  VISUAL CHECK
 # ══════════════════════════════════════════════════════════
@@ -257,24 +257,35 @@ cat(sprintf("Max RU ID: %d (expect 100)\n",
 cols   <- c("gray30", "pink", "darkgreen")
 breaks <- c(-2.5, 0.5, 1.5, 2.5)
 
+
+
+# title built from what is actually in the raster
+make_title <- function(r, label) {
+  n_cells <- sum(values(r) == VAL_DISTURBED, na.rm = TRUE)
+  sprintf("%s\n%.1f%% (%.1f ha)",
+          label, 100 * n_cells / (n * n), n_cells * res_m^2 / 10000)
+}
+
+
 # 5 panels: 4 stand grids + 1 legend
-layout(matrix(1:5, nrow = 1), widths = c(4, 4, 4, 4, 1.5))
-par(mar = c(2, 2, 3, 1))
+layout(matrix(1:5, nrow = 1), widths = c(4, 4, 4, 4, 2))
+par(mar = c(2, 2, 4, 1))
 
-plot(r1, col = cols, breaks = breaks, legend = FALSE,
-     main = "1 blob\n3.86 ha")
-plot(r2, col = cols, breaks = breaks, legend = FALSE,
-     main = "2 blobs\n1.93 ha each")
-plot(r4, col = cols, breaks = breaks, legend = FALSE,
-     main = "4 blobs\n0.97 ha each")
-plot(r8, col = cols, breaks = breaks, legend = FALSE,
-     main = "8 blobs\n0.48 ha each")
 
-par(mar = c(2, 0, 3, 1))
+plot(r1, col = cols, breaks = breaks, legend = FALSE, main = make_title(r1, 1))
+plot(r2, col = cols, breaks = breaks, legend = FALSE, main = make_title(r2, 2))
+plot(r4, col = cols, breaks = breaks, legend = FALSE, main = make_title(r4, 4))
+plot(r8, col = cols, breaks = breaks, legend = FALSE, main = make_title(r8, 8))
+
+
+par(mar = c(0, 0, 0, 0))
 plot.new()
 legend("center",
        legend = c("belt (-2)", "disturbed (1)", "mature (2)"),
        fill   = cols,
        title  = "Stand type",
-       cex    = 0.9,
+       cex    = 1,
        bty    = "n")
+
+
+dev.off()
