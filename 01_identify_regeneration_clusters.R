@@ -34,6 +34,12 @@ library(GGally)
 getwd()
 
 
+# save output directory ------------------------------------------------
+out_dir <- "outData/iland_init"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+
+
 #  0. Load data ───────────────────────────────────────── --------------
 # read elevation info
 plot_v_all_countries <- terra::vect("../../r_post_brouk/outDataShare/Karim_AEF/cleaned/env_chars_plots.gpkg") 
@@ -48,7 +54,8 @@ sub_veg <- fread("../../r_post_brouk/outData/dat_full_species_all_countries.csv"
   filter(country_name == "Czechia" & year == 2025) %>%
   mutate(
     plot      = as.character(plot)
-  )
+  ) |> 
+  filter(!species %in% c("ots1", ""))
 
 # export only czechia for Claude analysis
 #fwrite(sub_veg, "../../r_post_brouk/outData/dat_full_species_Czechia_2025.csv")
@@ -141,23 +148,24 @@ cat("Plots with >=1 residual mature tree:", sum(merged_df$has_mature), "\n\n")
 # ---------------------------------------------------------------------
 # as my groups are rather a gradinet that distinct grousp, i wpould lie to keep them ecologically separated
 
-#  T0_bare   : all subplots empty            -> iLand bare-soil init
-#  T_mature  : has_mature & not bare         -> residual overstory archetype
+#  T0   : all subplots empty            -> iLand bare-soil init
+#  T4  : has_mature & not bare         -> residual overstory archetype
 #              (too few plots, n=10, to split further by composition —
 #               pooled into one type regardless of understory profile)
 #  Everything else -> data-driven clustering (regen only, no legacy trees).
+#  will be T1, T2, T3
 merged_df <- merged_df %>%
-  mutate(regen_type = if_else(all_empty, "T0_bare", "to_cluster")) %>% 
+  mutate(regen_type = if_else(all_empty, "T0", "to_cluster")) %>% 
   mutate(
     regen_type = case_when(
-      all_empty            ~ "T0_bare",
-      has_mature            ~ "T_mature",
+      all_empty            ~ "T0",
+      has_mature            ~ "T4",
       TRUE                   ~ "to_cluster"
     )
   )
 
-cat("Pre-classified as T0_bare:  ", sum(merged_df$regen_type == "T0_bare"), "\n")
-cat("Pre-classified as T_mature: ", sum(merged_df$regen_type == "T_mature"), "\n")
+cat("Pre-classified as T0_bare:  ", sum(merged_df$regen_type == "T0"), "\n")
+cat("Pre-classified as T_mature: ", sum(merged_df$regen_type == "T4"), "\n")
 cat("Remaining for clustering:  ", sum(merged_df$regen_type == "to_cluster"), "\n\n")
 
 #
@@ -169,7 +177,7 @@ resp_vars <- c("dens_ha", "mean_hgt", "cv_hgt", "frac_empty_sub",
                "CWM_shade", "CWM_drought", "spruce_share", "IV_coniferous")
 
 pca_df <- merged_df %>%
-  filter(regen_type %notin% c("T0_bare", "T_mature")) %>%     # bare has no meaningful position; join regen_type on first if not present
+  filter(regen_type %notin% c("T0", "T4")) %>%     # bare has no meaningful position; join regen_type on first if not present
   select(all_of(resp_vars)) %>%
   drop_na()
 
@@ -181,7 +189,7 @@ summary(pca_fit)            # variance explained per PC
 print(round(pca_fit$rotation[, 1:3], 2))   # loadings on PC1-3
 
 library(ggfortify)
-autoplot(pca_fit, data = merged_df  %>% filter(regen_type %notin% c("T0_bare", "T_mature")) %>% 
+autoplot(pca_fit, data = merged_df  %>% filter(regen_type %notin% c("T0", "T4")) %>% 
            drop_na(all_of(resp_vars)),
          colour = "regen_type",
          loadings = TRUE, loadings.label = TRUE, loadings.colour = "black") +
@@ -225,23 +233,24 @@ X_sc <- scale(X)
 
 ### see plots 1:1 to checsk wheather there are any clusters possible ---------------------------------
 # the 5 variables that entered PAM — edit names to match your clust_data
+# taking long time - comment out
 
-pair_df <- 
-  merged_df %>%                                    # plots that entered clustering
-  select(plot, all_of(vars), has_mature) %>% 
- # left_join(plots %>% select(plot, has_mature, n_mature), by = "plot") %>%
-  mutate(mature = ifelse(has_mature, "mat_present", "mat_abs"))
+# pair_df <- 
+#   merged_df %>%                                    # plots that entered clustering
+#   select(plot, all_of(vars), has_mature) %>% 
+#  # left_join(plots %>% select(plot, has_mature, n_mature), by = "plot") %>%
+#   mutate(mature = ifelse(has_mature, "mat_present", "mat_abs"))
 
-ggpairs(
-  pair_df, columns = vars,
-  mapping = aes(colour = mature),
-  lower = list(continuous = wrap("points", alpha = 0.6, size = 1.3)),
-  upper = list(continuous = wrap("cor", size = 3)),
-  diag  = list(continuous = wrap("densityDiag", alpha = 0.4))
-) +
-  scale_colour_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
-  scale_fill_manual(  values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
-  theme_bw()
+# ggpairs(
+#   pair_df, columns = vars,
+#   mapping = aes(colour = mature),
+#   lower = list(continuous = wrap("points", alpha = 0.6, size = 1.3)),
+#   upper = list(continuous = wrap("cor", size = 3)),
+#   diag  = list(continuous = wrap("densityDiag", alpha = 0.4))
+# ) +
+#   scale_colour_manual(values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
+#   scale_fill_manual(  values = c("mat_abs" = "grey80", "mat_present" = "darkgreen")) +
+#   theme_bw()
 
 
 
@@ -293,7 +302,7 @@ print(as.data.frame(medoids)); cat("\n")
 merged_df_cluster <- merged_df %>%
   left_join(clust_data %>% select(plot, cluster_raw), by = "plot") %>%
   mutate(regen_type = case_when(
-    regen_type %in% c("T0_bare", "T_mature") ~ regen_type,
+    regen_type %in% c("T0", "T4") ~ regen_type,
     TRUE                                       ~ paste0("T", cluster_raw)
   ))
 
@@ -369,6 +378,54 @@ print(table(regen_type = merged_df_cluster$regen_type,
 # If has_mature concentrates in one type -> that's your residual-overstory
 # archetype, and its medoid's tree file will carry the survivors.
 
+
+
+# seee the types in 3D space
+# 
+# library(scatterplot3d)
+# 
+# d3 <- merged_df_cluster %>%
+#   filter(regen_type %in% c("T1", "T2", "T3"), dens_ha > 0) %>%
+#   select(plot, regen_type, dens_ha, spruce_share, sp_richness) %>%
+#   drop_na()
+# 
+# cols3 <- setNames(RColorBrewer::brewer.pal(3, "Set2"), c("T1", "T2", "T3"))
+# med3  <- d3 %>% filter(plot %in% medoids$medoid_plot)
+# 
+# s3d <- scatterplot3d(
+#   x = log10(d3$dens_ha), y = d3$spruce_share, z = jitter(d3$sp_richness, amount = 0.15),
+#   color = cols3[d3$regen_type], pch = 19, cex.symbols = 0.9,
+#   type = "h", lty.hplot = "dotted",            # drop-lines to the floor help read the position
+#   angle = 50, box = FALSE, grid = TRUE,
+#   xlab = "log10 density (stems/ha)", ylab = "spruce share", zlab = "species richness")
+# 
+# s3d$points3d(log10(med3$dens_ha), med3$spruce_share, med3$sp_richness,
+#              pch = 8, cex = 2, col = "black")  # medoids
+# legend("topright", legend = names(cols3), col = cols3, pch = 19, bty = "n")
+# 
+
+
+
+# see pair plots -----------------------------
+pair_plot <- function(xv, yv, xlab, ylab, logx = FALSE, logy = FALSE) {
+  p <- ggplot(d3, aes(.data[[xv]], .data[[yv]], colour = regen_type)) +
+    geom_jitter(width = 0, height = if (yv == "sp_richness") 0.15 else 0, alpha = 0.6) +
+    stat_ellipse(level = 0.68, linewidth = 0.8) +  # , fill = regen_type                # ~1 SD spread
+    geom_point(data = med3, shape = 8, size = 4, stroke = 1.1, colour = "black") +
+    scale_colour_brewer(palette = "Set2") +
+    labs(x = xlab, y = ylab, colour = "type") + theme_bw()
+  if (logx) p <- p + scale_x_log10()
+  p
+}
+
+ggarrange(
+  pair_plot("dens_ha", "spruce_share", "density (stems/ha, log)", "spruce share", logx = TRUE),
+  pair_plot("dens_ha", "sp_richness", "density (stems/ha, log)", "species richness", logx = TRUE),
+  pair_plot("spruce_share", "sp_richness", "spruce share", "species richness"),
+  nrow = 1, common.legend = TRUE, legend = "bottom")
+
+
+
 # ---------------------------------------------------------------------
 # 5b. Driver check: does elevation structure the response? (post-hoc)
 # ---------------------------------------------------------------------
@@ -401,7 +458,7 @@ cat("\n")
 
 # see the 3 regeneration groups
 merged_df_cluster %>%
-  filter(regen_type %in% c("T1","T2","T3")) %>%          # drop T0_bare/T_mature: too few/degenerate for a trend line
+  filter(regen_type %in% c("T1","T2","T3")) %>%          # drop T0/T4: too few/degenerate for a trend line
   select(regen_type, elevation, effective_numbers, sp_richness, spruce_share) %>%
   pivot_longer(c(effective_numbers, sp_richness, spruce_share),
                names_to = "response", values_to = "value") %>%
@@ -424,9 +481,9 @@ merged_df_cluster %>%
 # the archetype inherits the observed assemblage of one real plot.
 
 # ---- 7a. tuning knobs (CHECK) ---------------------------------------
-SUBPLOT_AREA_M2     <- 4       # quadrat area per subplot (verify!)
-ILAND_STAND_AREA_M2 <- 10000   # target stand area: 10000 = 1 ha RU,
-# 100 = one 10 m stand pixel
+SUBPLOT_AREA_M2     <- 4       # quadrat area per subplot 
+ILAND_STAND_AREA_M2 <- 10000   # target stand area: 10000 = 1 ha RU, iLand counst on counts per ha
+
 
 # ---- 7b. species-code crosswalk (CHECK / EDIT) ----------------------
 # Most 4-letter codes are already valid iLand species. The genus-level
@@ -456,6 +513,8 @@ hgt_map <- data.frame(
 
 # ---- 7d. builders ----------------------------------------------------
 # saplings: regeneration < 4 m (vegtype small + advanced)
+# !!! how to handle n_sub!!!! - i want to define manually
+n_sub_manual = 5 
 build_saplings <- function(plot_key, stand_id) {
   d <- sub_veg %>%
     filter(plot == plot_key, !is.na(n), n > 0, vegtype %in% c("small","advanced")) %>%
@@ -467,9 +526,11 @@ build_saplings <- function(plot_key, stand_id) {
             paste(unique(d$hgt[is.na(d$height_from)]), collapse = ", "))
   
   d %>%
-    mutate(n_sub = n_distinct(subplot)) %>%
+    mutate(n_sub = n_sub_manual) %>%
     group_by(species, height_from, height_to) %>%
-    summarise(stems = sum(n), n_sub = first(n_sub), .groups = "drop") %>%
+    summarise(stems = sum(n), 
+              n_sub = n_sub_manual, 
+              .groups = "drop") %>%
     mutate(
       iland_species = species_map[species],
       count = round(stems / (n_sub * SUBPLOT_AREA_M2) * ILAND_STAND_AREA_M2),
@@ -484,8 +545,9 @@ build_saplings <- function(plot_key, stand_id) {
 # trees: mature, dbh >= 10 cm (only where present)
 build_trees <- function(plot_key, stand_id) {
   d <- sub_veg %>%
-    filter(plot == plot_key, !is.na(n), n > 0, vegtype == "mature")
+    filter(plot %in% plot_key, !is.na(n), n > 0, vegtype == "mature")   # CHANGED: %in% (was ==)
   if (nrow(d) == 0) return(NULL)
+  n_plots <- length(plot_key)                                           # NEW: number of plots pooled
   
   d %>%
     mutate(
@@ -493,71 +555,206 @@ build_trees <- function(plot_key, stand_id) {
                            dbh_est < 60 ~ 40, TRUE ~ 60),
       dbh_to   = case_when(dbh_est < 20 ~ 20, dbh_est < 40 ~ 40,
                            dbh_est < 60 ~ 60, TRUE ~ 80),
-      hd  = round(hgt_est * 100 / dbh_est),   # height(cm)/dbh(cm)
-      age = 0,                                # 0 -> iLand estimates from dbh
-      n_sub = n_distinct(subplot),
+      hd  = hgt_est * 100 / dbh_est,                                    # CHANGED: no rounding here
       iland_species = species_map[species],
-      count = round(n / (n_sub * SUBPLOT_AREA_M2) * ILAND_STAND_AREA_M2),
       stand_id = stand_id
     ) %>%
-    filter(!is.na(iland_species), count > 0) %>%
-    group_by(stand_id, species = iland_species, dbh_from, dbh_to, hd, age) %>%
-    summarise(count = sum(count), .groups = "drop") %>%
+    filter(!is.na(iland_species)) %>%
+    group_by(stand_id, species = iland_species, dbh_from, dbh_to) %>%   # CHANGED: hd/age removed from grouping
+    summarise(
+      count = round(sum(n) / (n_sub_manual * n_plots * SUBPLOT_AREA_M2) * ILAND_STAND_AREA_M2),  # CHANGED: n_plots in the denominator
+      hd    = round(weighted.mean(hd, n, na.rm = TRUE)),                # CHANGED: weighted mean hd
+      age   = 0, .groups = "drop") %>%
+    filter(count > 0) %>%                                               # CHANGED: rounding after summing
     select(stand_id, species, count, dbh_from, dbh_to, hd, age)
 }
 
-# ---- 7e. run over archetypes ----------------------------------------
-# stand_id is a placeholder here (1,2,3...); replace with the actual
-# stand-grid value each archetype occupies in your landscape.
-# add for bare soil and for mature-Trees present
-bare_plot <- merged_df_cluster %>%
-  filter(regen_type == "T0_bare") %>%
-  pull(plot)
+# ---- 7e. medoids + generic mature stand ------------------------------
+DIST_ID   <- 1L    # disturbed / regenerating stand in the stand grid
+MATURE_ID <- 2L    # undisturbed mature forest stand in the stand grid
+
+bare_plot <- merged_df_cluster %>% filter(regen_type == "T0") %>% pull(plot)
 
 mature_data <- merged_df_cluster %>%
-  filter(regen_type == "T_mature") %>%
-  select(plot, all_of(vars)) %>%     # vars = dens_ha, mean_hgt, spruce_share, sp_richness, frac_empty_sub
+  filter(regen_type == "T4") %>%
+  select(plot, all_of(vars)) %>%
   drop_na()
-
-mature_dist <- as.matrix(dist(scale(mature_data %>% select(-plot))))
+mature_dist        <- as.matrix(dist(scale(mature_data %>% select(-plot))))
 mature_medoid_plot <- mature_data$plot[which.min(rowSums(mature_dist))]
 
-# add other groups into medoids
-medoids <- bind_rows(
+medoids_full <- bind_rows(
   medoids %>% mutate(regen_type = paste0("T", cluster_raw)),
-  tibble(cluster_raw = NA_integer_, medoid_plot = bare_plot,          regen_type = "T0_bare"),
-  tibble(cluster_raw = NA_integer_, medoid_plot = mature_medoid_plot, regen_type = "T_mature")
+  tibble(cluster_raw = NA_integer_, medoid_plot = bare_plot,          regen_type = "T0"),
+  tibble(cluster_raw = NA_integer_, medoid_plot = mature_medoid_plot, regen_type = "T4")
+)
+medoids_full
+
+# PLACEHOLDER: ~100-yr Norway spruce, Kostelec uplands (not real data, replace later).
+# 380 trees/ha, basal area ~47 m2/ha; hd = height/dbh (thin trees ~21 m, thick ~33 m)
+mature_placeholder <- tibble::tribble(
+  ~species, ~count, ~dbh_from, ~dbh_to, ~hd, ~age,
+  "piab",     30,       50,       60,     60, 100,
+  "piab",    140,       40,       50,     70, 100,
+  "piab",    160,       30,       40,     78, 100,
+  "piab",     50,       20,       30,     85, 100
 ) %>%
-  mutate(stand_id = row_number())
+  mutate(stand_id = MATURE_ID) %>%
+  select(stand_id, species, count, dbh_from, dbh_to, hd, age)
 
-medoids
 
-out_dir <- "outData/iland_init"
-dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+# ---- 7f. species audit: which species are missing from my partial landscapes? ------------------------------------------------
+n_plots_total <- n_distinct(sub_veg$plot)  # 199
 
-for (i in seq_len(nrow(medoids))) {
-  pk  <- medoids$medoid_plot[i]
-  sid <- medoids$stand_id[i]
-  typ <- medoids$regen_type[i]          # <- also fixes the TNA bug from before
+
+# 1) importance of every iLand species in the ORIGINAL data (codes merged)
+sp_importance <- sub_veg %>%
+  filter(!is.na(n), n > 0) %>%
+  mutate(iland_species = unname(species_map[species]),
+         layer = if_else(vegtype == "mature", "mature", "regen")) %>%
+  filter(!is.na(iland_species)) %>%
+  group_by(iland_species) %>%
+  summarise(codes        = paste(sort(unique(species)), collapse = "+"),
+            stems_regen  = sum(n[layer == "regen"]),
+            stems_mature = sum(n[layer == "mature"]),
+            n_plots      = n_distinct(plot), .groups = "drop") %>%
+  mutate(pct_regen_stems = round(100 * stems_regen / sum(stems_regen), 2),
+         pct_plots       = round(100 * n_plots / n_plots_total, 1)) %>%
+  arrange(desc(pct_regen_stems))
+
+# 2) species in each landscape's disturbed stand (stand 1; T0 = bare, skipped)
+medoid_species <- bind_rows(lapply(seq_len(nrow(medoids_full)), function(i) {
+  typ <- medoids_full$regen_type[i]; pk <- medoids_full$medoid_plot[i]
+  if (typ == "T0") return(NULL)
+  tibble(type = typ,
+         species = unique(c(build_saplings(pk, DIST_ID)$species,
+                            build_trees(pk, DIST_ID)$species)))
+}))
+print(medoid_species %>% count(type, name = "n_species"))
+
+presence  <- medoid_species %>% mutate(x = TRUE) %>%
+  pivot_wider(names_from = type, values_from = x, values_fill = FALSE)
+type_cols <- setdiff(names(presence), "species")
+
+# 3) one table: importance + which landscapes have it + missing from all?
+sp_audit <- sp_importance %>%
+  left_join(presence, by = c("iland_species" = "species")) %>%
+  mutate(across(all_of(type_cols), ~ coalesce(.x, FALSE)),
+         n_landscapes = rowSums(across(all_of(type_cols))),
+         in_composite = n_landscapes > 0)
+print(as.data.frame(sp_audit), row.names = FALSE)
+
+missing_tbl <- sp_audit %>% filter(!in_composite, stems_regen > 0) %>%
+  select(iland_species, codes, pct_regen_stems, pct_plots)
+cat(sprintf("\nSpecies in data: %d | in >=1 landscape: %d | missing from ALL: %d = %.1f%% of regeneration stems\n",
+            nrow(sp_audit), sum(sp_audit$in_composite), nrow(missing_tbl),
+            sum(missing_tbl$pct_regen_stems)))
+print(as.data.frame(missing_tbl), row.names = FALSE)
+
+# print which species are missing
+print(as.data.frame(sp_audit %>% filter(!in_composite) %>%
+                      select(iland_species, codes, stems_regen, stems_mature, n_plots, pct_regen_stems, pct_plots)),
+      row.names = FALSE)
+
+
+# manually identified species to add: species that covers > 1% of all stems  --------------
+# or: not included species covers less then 1% of all stems
+SP3 <- missing_tbl %>%
+  filter(pct_regen_stems > 1) %>% # select species that have more then 1 % of stems
+  pull(iland_species) 
+
+n_sub_total   <- sub_veg %>% distinct(plot, subplot) %>% nrow()     # all subplots, empty ones included
+n_plots_total <- n_distinct(sub_veg$plot)
+
+# see overall distribution
+sub_veg %>%
+     filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced")) %>%
+     filter(species %in% SP3) %>%
+     group_by(species, hgt_est) |> 
+   summarise(stems    = sum(n),
+                          n_plots  = n_distinct(plot),
+                          # hgt_mean = weighted.mean(hgt_est, n),
+                           # hgt_sd   = sqrt(sum(n * (hgt_est - weighted.mean(hgt_est, n))^2) / (sum(n) - 1)),
+                           .groups = "drop") %>%
+   print(n = 40)
+
+sub_veg |> 
+  filter(plot == "126" & !is.na(n))
+
+sp3_summary <- 
+  sub_veg %>%
+  filter(!is.na(n), n > 0, vegtype %in% c("small", "advanced")) %>%
+  filter(species %in% SP3) %>%
+  group_by(species) |> 
+  summarise(stems    = sum(n),
+            n_plots  = n_distinct(plot),
+            hgt_mean = weighted.mean(hgt_est, n, na.rm = T),
+            #hgt_sd   = sqrt(sum(n * (hgt_est - weighted.mean(hgt_est, n, na.rm = T))^2) / (sum(n) - 1)),
+            .groups = "drop") 
+
+print(as.data.frame(sp3_summary), row.names = FALSE)
+
+# ready-to-paste sapling rows (stand 1)
+cls <- hgt_map %>% filter(key != ">4")
+
+sp3_rows <- sp3_summary %>%
+  arrange(species) %>%                       # lade, potr, saca
+  mutate(
+    stand_id = DIST_ID,
+    count    = as.integer(round(stems / (n_sub_total * SUBPLOT_AREA_M2) * ILAND_STAND_AREA_M2)),
+    idx      = findInterval(hgt_mean, c(cls$height_from, Inf)),   # class containing the mean
+    height_from = cls$height_from[idx],
+    height_to   = cls$height_to[idx]
+  ) %>%
+  select(stand_id, species, count, height_from, height_to)
+
+print(as.data.frame(sp3_rows), row.names = FALSE)   # check: all three should be 1.3 / 2.0
+
+
+
+
+# export files ---------------------------------------------------------------------------
+add_manual <- list(T1 = sp3_rows[1, ], T2 = sp3_rows[2, ], T3 = sp3_rows[3, ])   # add 1 species per partial landscape
+
+RESID_BA_TARGET <- 5   # m2/ha, ASSUMPTION: residual trees in the disturbed stand (mature stand = ~41 m2/ha)
+
+for (i in seq_len(nrow(medoids_full))) {
+  pk  <- medoids_full$medoid_plot[i]
+  typ <- medoids_full$regen_type[i]
+  if (typ == "T0") { cat("\n", typ, "-> bare soil, skipped\n"); next }
   
-  sap <- build_saplings(pk, sid)
-  tre <- build_trees(pk, sid)
+  # stand 1 = disturbed
+  sap <- build_saplings(pk, DIST_ID)
+  sap <- bind_rows(sap, add_manual[[typ]])      # lade -> T1, potr -> T2, saca -> T3 (NULL for T4)
   
-  cat(sprintf("\n--- %s | medoid plot %s | stand_id %d ---\n", typ, pk, sid))
-  cat("saplings:\n"); print(as.data.frame(sap))
-  write.csv(sap, file.path(out_dir, sprintf("iniplt_%s_sap.txt", typ)),
-            row.names = FALSE, quote = TRUE)
-  
-  if (!is.null(tre)) {
-    cat("mature trees:\n"); print(as.data.frame(tre))
-    write.csv(tre, file.path(out_dir, sprintf("iniplt_%s_tree.txt", typ)),
-              row.names = FALSE, quote = TRUE)
-  } else {
-    cat("mature trees: none (empty tree layer)\n")
+  # residual trees of the medoid plot (NULL for T1-T3), scaled down to the BA target
+  tre_dist <- build_trees(pk, DIST_ID)
+  if (!is.null(tre_dist)) {
+    ba_now <- sum(tre_dist$count * pi * ((tre_dist$dbh_from + tre_dist$dbh_to) / 2 / 200)^2)
+    k <- min(1, RESID_BA_TARGET / ba_now)       # only scales down, never up
+    tre_dist <- tre_dist %>% mutate(count = pmax(1L, as.integer(round(count * k))))
+    cat(sprintf("residual trees scaled x%.3f: %.1f -> %.1f m2/ha\n", k, ba_now, ba_now * k))
   }
+  tre <- bind_rows(tre_dist, mature_placeholder)   # stand 2 = mature spruce
+  
+  # tallest / thickest first within each stand
+  sap <- sap %>% arrange(stand_id, desc(height_to), desc(height_from), desc(count))
+  tre <- tre %>% arrange(stand_id, desc(dbh_to),    desc(dbh_from),    desc(count))
+  
+  cat(sprintf("\n--- %s | medoid plot %s ---\n", typ, pk))
+  cat("saplings:\n"); print(as.data.frame(sap))
+  cat("trees:\n");    print(as.data.frame(tre))
+  
+  write.csv(sap, file.path(out_dir, sprintf("iniplt_%s_sap.txt",  typ)), row.names = FALSE, quote = TRUE)
+  write.csv(tre, file.path(out_dir, sprintf("iniplt_%s_tree.txt", typ)), row.names = FALSE, quote = TRUE)
 }
 
-cat("\nT0_bare -> initialize as bare soil (no init file).\n")
+# read back and check
+for (f in list.files(out_dir, "^iniplt_.*\\.txt$", full.names = TRUE)) {
+  d <- read.csv(f)
+  cat(basename(f), "| rows:", nrow(d), "| stand_ids:",
+      paste(sort(unique(d$stand_id)), collapse = ","), "| NA cells:", sum(is.na(d)), "\n")
+}
+
 
 # ---------------------------------------------------------------------
 # 8. Export
